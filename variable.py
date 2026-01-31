@@ -51,12 +51,25 @@ class LinearVariable(Variable):
         self.t0 = t
 
     def when(self, target):
-        if target<self.min:
+        """Calculate when this variable will reach the target value.
+
+        Returns the time when target is reached, or None if:
+        - Target is outside min/max bounds
+        - Rate is zero (value never changes)
+        - Rate direction means we're moving away from target
+        """
+        if target < self.min or target > self.max:
             return None
-        if target>self.max:
-            return None
-        
-        if self.rate>0:
-            return (target-self.value)/self.rate + self.t0
+
+        if self.rate == 0:
+            # Value is constant - only reaches target if already there
+            return self.t0 if self.value == target else None
+
+        # Calculate time to reach target
+        t = (target - self.value) / self.rate + self.t0
+
+        # Only return if the time is in the future (or present)
+        if t >= self.t0:
+            return t
         else:
             return None

@@ -14,8 +14,12 @@ from gamedefs import (
     get_activity_names,
     get_activity_description,
     get_activity_requirements,
+    get_activity_by_displayname,
     format_requirements,
+    format_consumed_produced,
+    make_activity_task,
 )
+from variable import LinearVariable
 
 if TYPE_CHECKING:
     from app_gui import TimescrubberApp
@@ -103,31 +107,97 @@ class ActivitiesScreen(ttk.Frame):
         if not selection:
             return
 
-        activity = self.activities_list.get(selection[0])
-        self.details_header.configure(text=activity)
+        activity_name = self.activities_list.get(selection[0])
+        activity = get_activity_by_displayname(activity_name)
+        if not activity:
+            return
 
-        # Update details
+        self.details_header.configure(text=activity["displayname"])
+
+        # Update details with description and resource effects
         self.details_text.configure(state="normal")
         self.details_text.delete("1.0", tk.END)
-        self.details_text.insert("1.0", get_activity_description(activity))
+
+        description = get_activity_description(activity_name)
+        resource_effects = format_consumed_produced(activity)
+
+        # Add duration estimate
+        rate = activity.get("rate", 10)
+        duration = 100 / rate if rate > 0 else float('inf')
+
+        full_text = f"{description}\n\n"
+        full_text += f"Duration: ~{duration:.1f} time units\n\n"
+        full_text += f"{resource_effects}"
+
+        self.details_text.insert("1.0", full_text)
         self.details_text.configure(state="disabled")
 
         # Update requirements
-        reqs = get_activity_requirements(activity)
+        reqs = get_activity_requirements(activity_name)
         self.requirements_label.configure(text=format_requirements(reqs))
 
     def _start_activity(self):
-        """Start the selected activity (placeholder)."""
+        """Start the selected activity as a Task on the timeline."""
         selection = self.activities_list.curselection()
         if not selection:
             return
 
-        activity = self.activities_list.get(selection[0])
-        # In a full implementation, this would create and add an event
-        print(f"Starting activity: {activity}")
+        activity_name = self.activities_list.get(selection[0])
+
+        # Check if requirements are met
+        if not self._can_start_activity(activity_name):
+            print(f"Cannot start {activity_name}: requirements not met")
+            return
+
+        # Create the task at the current time
+        current_time = self.app.current_time
+        task = make_activity_task(activity_name, current_time)
+
+        if task:
+            # Add the task to the timeline
+            self.gamestate.timeline.add_event(task)
+            print(f"Started activity: {activity_name} at t={current_time}")
+
+            # Refresh the display
+            self.app.update_display()
+        else:
+            print(f"Failed to create task for: {activity_name}")
+
+    def _can_start_activity(self, activity_name: str) -> bool:
+        """Check if an activity can be started based on current resources."""
+        activity = get_activity_by_displayname(activity_name)
+        if not activity:
+            return False
+
+        requirements = activity.get("requirements", {})
+        current_time = self.app.current_time
+        ts = self.gamestate.timeline.state_at(current_time)
+
+        # Check requirements
+        for var_name, amount in requirements.items():
+            var = ts.get_variable(var_name)
+            if not var:
+                return False
+            if isinstance(var, LinearVariable):
+                if var.get(current_time) < amount:
+                    return False
+            else:
+                if var.get(current_time) < amount:
+                    return False
+
+        # Check that the task isn't already running (uniqueness)
+        internal_name = activity.get("name", "")
+        if ts.get_variable(internal_name + "_progress"):
+            return False
+
+        return True
 
     def update_display(self, current_time: float):
-        """Update the activities display."""
-        # In a full implementation, this would update availability
-        # based on current resources and state
-        pass
+        """Update the activities display to show availability."""
+        # Update each activity's availability status
+        for i in range(self.activities_list.size()):
+            activity_name = self.activities_list.get(i)
+            if self._can_start_activity(activity_name):
+                self.activities_list.itemconfig(i, fg="black")
+            else:
+                self.activities_list.itemconfig(i, fg="gray")
