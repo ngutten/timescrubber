@@ -1,0 +1,2 @@
+# Here we'll have the code that displays resource values and rates (in the upper part of the sidepanel)
+# and the code that shows the list of currently active tasks (in the lower part of the sidepanel)
