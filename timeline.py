@@ -83,7 +83,7 @@ class Timeline():
             self.invalidate_after(new_max)
 
     def recompute_bottlenecks(self, ts: TimeState):
-        """Review all running processes and reschedule their end events if needed.
+        """Review all running processes and update their end events.
 
         This is called after each event triggers, as changes to variables might
         affect when running processes will deplete their resources.
@@ -91,56 +91,69 @@ class Timeline():
         t = ts.time
 
         for process in ts.processes[:]:  # Copy list as we might modify it
-            # Skip if this process doesn't have an end event scheduled
-            if not hasattr(process, 'end_event') or process.end_event is None:
-                continue
+            # Calculate when this process will end
+            end_time, end_type = self._calculate_process_end(process, ts, t)
 
-            # Recalculate when resources will run out
-            new_end_time = None
+            if end_time is not None:
+                # Create appropriate end event
+                if end_type == "complete":
+                    process.end_event = TaskComplete(process, end_time)
+                elif end_type == "interrupt":
+                    process.end_event = TaskInterrupt(process, end_time)
+                else:
+                    process.end_event = ProcessEnd(process, end_time)
+                process.end_event.invalidate = True
 
-            # For Tasks, also consider progress completion
-            if isinstance(process, Task):
-                progress_var = ts.get_variable(process.name + "_progress")
-                if progress_var:
-                    completion_time = progress_var.when(100)
-                    if completion_time is not None and completion_time > t:
-                        new_end_time = completion_time
+    def _calculate_process_end(self, process, ts: TimeState, t: float) -> Tuple[Optional[float], str]:
+        """Calculate when a process will end and why.
 
-            # Check consumed resources for depletion
-            for var_name, rate in process.consumed:
-                var = ts.get_variable(var_name)
-                if var and isinstance(var, LinearVariable):
-                    zero_time = var.when(var.min)
-                    if zero_time is not None and zero_time > t:
-                        if new_end_time is None or zero_time < new_end_time:
-                            new_end_time = zero_time
-                            # For Tasks, mark this as interrupt, not completion
-                            if isinstance(process, Task):
-                                # This will be an interrupt since depletion comes first
-                                pass
+        Returns (end_time, end_type) where end_type is one of:
+        - "complete" for TaskComplete
+        - "interrupt" for TaskInterrupt (resource depletion)
+        - "end" for ProcessEnd
+        """
+        completion_time = None
+        depletion_time = None
 
-            # Update the end event if the time changed
-            if new_end_time is not None:
-                old_end_event = process.end_event
-                if abs(old_end_event.t - new_end_time) > 0.001:  # Time changed significantly
-                    # Create new appropriate end event (replaces the old one)
-                    if isinstance(process, Task):
-                        progress_var = ts.get_variable(process.name + "_progress")
-                        completion_time = progress_var.when(100) if progress_var else None
+        # For Tasks, check progress completion
+        if isinstance(process, Task):
+            progress_var = ts.get_variable(process.name + "_progress")
+            if progress_var:
+                completion_time = progress_var.when(100)
+                if completion_time is not None and completion_time <= t:
+                    completion_time = None  # Already completed
 
-                        if completion_time is not None and (completion_time <= new_end_time or new_end_time == completion_time):
-                            process.end_event = TaskComplete(process, completion_time)
-                        else:
-                            process.end_event = TaskInterrupt(process, new_end_time)
-                    else:
-                        process.end_event = ProcessEnd(process, new_end_time)
+        # Check consumed resources for depletion
+        for var_name, rate in process.consumed:
+            var = ts.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                zero_time = var.when(var.min)
+                if zero_time is not None and zero_time > t:
+                    if depletion_time is None or zero_time < depletion_time:
+                        depletion_time = zero_time
 
-                    process.end_event.invalidate = True
-                    # Don't add to events list - check_bottlenecks finds it via process.end_event
+        # Determine which comes first
+        if isinstance(process, Task):
+            if completion_time is not None:
+                if depletion_time is None or completion_time <= depletion_time:
+                    return (completion_time, "complete")
+                else:
+                    return (depletion_time, "interrupt")
+            elif depletion_time is not None:
+                return (depletion_time, "interrupt")
+            else:
+                return (None, "")
+        else:
+            # Regular Process
+            if depletion_time is not None:
+                return (depletion_time, "end")
+            else:
+                return (None, "")
 
     def check_bottlenecks(self, t0: float, t1: float) -> Tuple[float, Optional["Event"]]:
         """Check if there are any resource bottlenecks between t0 and t1.
 
+        Calculates end times dynamically based on current resource states.
         Returns (time, event) where the event is a ProcessEnd or TaskInterrupt
         that needs to fire, or (t1, None) if no bottleneck before t1.
         """
@@ -149,13 +162,18 @@ class Timeline():
         earliest_event = None
 
         for process in ts.processes:
-            if not hasattr(process, 'end_event') or process.end_event is None:
-                continue
+            end_time, end_type = self._calculate_process_end(process, ts, t0)
 
-            end_time = process.end_event.t
-            if t0 < end_time < earliest_time:
+            if end_time is not None and t0 < end_time < earliest_time:
                 earliest_time = end_time
-                earliest_event = process.end_event
+                # Create the appropriate end event
+                if end_type == "complete":
+                    earliest_event = TaskComplete(process, end_time)
+                elif end_type == "interrupt":
+                    earliest_event = TaskInterrupt(process, end_time)
+                else:
+                    earliest_event = ProcessEnd(process, end_time)
+                earliest_event.invalidate = True
 
         return (earliest_time, earliest_event)
 
