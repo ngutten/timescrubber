@@ -5,6 +5,8 @@ import bisect
 from variable import Variable, LinearVariable
 from registry import Registry
 
+import const
+
 class TimeState():
     registry: Registry = None
     processes: List[Optional["Process"]] = None  # These are things that modify rates while present, so we have to be careful to apply and undo their effects correctly
@@ -196,40 +198,46 @@ class Timeline():
         return (earliest_time, earliest_event)
 
     def recompute(self, t0): # Recompute all events and states from t0 onwards
-        cur_time = t0
+            cur_time = t0
 
-        while cur_time < self.max_time:
-            next_time, next_event = self.next_event(cur_time)
+            while cur_time < self.max_time:
+                next_time, next_event = self.next_event(cur_time)
 
-            # Check if there are any bottlenecks between now and then
-            next_btime, next_bottleneck = self.check_bottlenecks(cur_time, next_time)
-            if next_bottleneck is not None:
-                # Add the bottleneck event to the events list so it shows on timeline
-                bisect.insort(self.events, next_bottleneck, key=lambda e: e.t)
-                # Only trigger if the event is within max_time
-                if next_btime <= self.max_time:
-                    # Trigger the bottleneck event (process end, task complete, etc.)
-                    triggered = next_bottleneck.trigger(next_btime, self)
-                    if not triggered:
-                        # Validation failed, remove the event
-                        self.events.remove(next_bottleneck)
+                # Check if there are any bottlenecks between now and then
+                next_btime, next_bottleneck = self.check_bottlenecks(cur_time, next_time)
+                
+                # FIX: Added 'and next_btime < next_time' to the condition below.
+                # We only want to trigger the bottleneck if it actually happens before
+                # the next known event.
+                if next_bottleneck is not None and next_btime < next_time:
+                    # Add the bottleneck event to the events list so it shows on timeline
+                    bisect.insort(self.events, next_bottleneck, key=lambda e: e.t)
+                    # Only trigger if the event is within max_time
+                    if next_btime <= self.max_time:
+                        # Trigger the bottleneck event (process end, task complete, etc.)
+                        triggered = next_bottleneck.trigger(next_btime, self)
+                        if not triggered:
+                            # Validation failed, remove the event
+                            self.events.remove(next_bottleneck)
+                        else:
+                            cur_time = next_btime
+                            ts = self.state_at(cur_time)
+                            self.recompute_bottlenecks(ts)
+                            continue
                     else:
-                        cur_time = next_btime
-                        ts = self.state_at(cur_time)
-                        self.recompute_bottlenecks(ts)
-                        continue
+                        # Event is beyond max_time, don't trigger yet but it's in the list
+                        break
+                
+                # If we didn't trigger a bottleneck, trigger the next existing event
+                elif next_event is not None:
+                    # Do the event
+                    next_event.trigger(next_time, self)
+                    cur_time = next_time
+                    ts = self.state_at(cur_time)
+                    self.recompute_bottlenecks(ts)
                 else:
-                    # Event is beyond max_time, don't trigger yet but it's in the list
+                    # No more events and no bottlenecks, done
                     break
-            if next_event is not None:
-                # Do the event
-                next_event.trigger(next_time, self)
-                cur_time = next_time
-                ts = self.state_at(cur_time)
-                self.recompute_bottlenecks(ts)
-            else:
-                # No more events and no bottlenecks, done
-                break
 
     def state_at(self, t): # Return the last TimeState from just before or equal to t from the state cache
         idx = bisect.bisect_right(self.state_cache, t, key=lambda e: e.time)-1
@@ -517,7 +525,7 @@ class TaskComplete(Event):
         progress = timestate.get_variable(self.task.name + "_progress")
         if not progress:
             return False
-        return progress.get(t) >= 100
+        return progress.get(t) >= 100-const.EPSILON
 
     def on_start_vars(self, timestate: TimeState):
         """Revert process rates and apply task completion effects."""
