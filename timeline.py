@@ -51,7 +51,7 @@ class Timeline():
     # Also remove and recompute all events after t which have invalidate=True
     def invalidate_after(self, t):
         self.state_cache = self.state_cache[:bisect.bisect_right(self.state_cache, t, key=lambda e: e.time)]
-        i = bisect.bisect_right(self.events, t, key=lambda e: e.time)
+        i = bisect.bisect_right(self.events, t, key=lambda e: e.t)
 
         head_events = self.events[:i]
 
@@ -64,11 +64,11 @@ class Timeline():
         self.recompute(t)
 
     def next_event(self, t): # Returns (time, next event) or (max_time, None)
-        idx = bisect.bisect_right(self.events, t, key=lambda e: e.time)
+        idx = bisect.bisect_right(self.events, t, key=lambda e: e.t)
 
         if idx < len(self.events):
             ev = self.events[idx]
-            return (ev.time, ev)
+            return (ev.t, ev)
         else:
             return (self.max_time, None)
     
@@ -82,15 +82,100 @@ class Timeline():
             self.max_time = new_max
             self.invalidate_after(new_max)
 
-    # Examine all of the Processes in this state, and adjust their rates according to bottlenecks
-    def recompute_bottlenecks(self, ts):
-        pass
+    def recompute_bottlenecks(self, ts: TimeState):
+        """Review all running processes and update their end events.
 
-    # Check if there are any resource bottlenecks between t0 and t1
-    # Returns (time, bottleneck) or (t1, None) if no bottleneck
-    def check_bottlenecks(self, t0, t1):
-        # Stub: no bottleneck system implemented yet
-        return (t1, None)
+        This is called after each event triggers, as changes to variables might
+        affect when running processes will deplete their resources.
+        """
+        t = ts.time
+
+        for process in ts.processes[:]:  # Copy list as we might modify it
+            # Calculate when this process will end
+            end_time, end_type = self._calculate_process_end(process, ts, t)
+
+            if end_time is not None:
+                # Create appropriate end event
+                if end_type == "complete":
+                    process.end_event = TaskComplete(process, end_time)
+                elif end_type == "interrupt":
+                    process.end_event = TaskInterrupt(process, end_time)
+                else:
+                    process.end_event = ProcessEnd(process, end_time)
+                process.end_event.invalidate = True
+
+    def _calculate_process_end(self, process, ts: TimeState, t: float) -> Tuple[Optional[float], str]:
+        """Calculate when a process will end and why.
+
+        Returns (end_time, end_type) where end_type is one of:
+        - "complete" for TaskComplete
+        - "interrupt" for TaskInterrupt (resource depletion)
+        - "end" for ProcessEnd
+        """
+        completion_time = None
+        depletion_time = None
+
+        # For Tasks, check progress completion
+        if isinstance(process, Task):
+            progress_var = ts.get_variable(process.name + "_progress")
+            if progress_var:
+                completion_time = progress_var.when(100)
+                if completion_time is not None and completion_time <= t:
+                    completion_time = None  # Already completed
+
+        # Check consumed resources for depletion
+        for var_name, rate in process.consumed:
+            var = ts.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                zero_time = var.when(var.min)
+                if zero_time is not None and zero_time > t:
+                    if depletion_time is None or zero_time < depletion_time:
+                        depletion_time = zero_time
+
+        # Determine which comes first
+        if isinstance(process, Task):
+            if completion_time is not None:
+                if depletion_time is None or completion_time <= depletion_time:
+                    return (completion_time, "complete")
+                else:
+                    return (depletion_time, "interrupt")
+            elif depletion_time is not None:
+                return (depletion_time, "interrupt")
+            else:
+                return (None, "")
+        else:
+            # Regular Process
+            if depletion_time is not None:
+                return (depletion_time, "end")
+            else:
+                return (None, "")
+
+    def check_bottlenecks(self, t0: float, t1: float) -> Tuple[float, Optional["Event"]]:
+        """Check if there are any resource bottlenecks between t0 and t1.
+
+        Calculates end times dynamically based on current resource states.
+        Returns (time, event) where the event is a ProcessEnd or TaskInterrupt
+        that needs to fire, or (t1, None) if no bottleneck before t1.
+        """
+        ts = self.state_at(t0)
+        earliest_time = t1
+        earliest_event = None
+
+        for process in ts.processes:
+            end_time, end_type = self._calculate_process_end(process, ts, t0)
+
+            if end_time is not None and t0 < end_time < earliest_time:
+                earliest_time = end_time
+                # Create the appropriate end event
+                if end_type == "complete":
+                    earliest_event = TaskComplete(process, end_time)
+                elif end_type == "interrupt":
+                    earliest_event = TaskInterrupt(process, end_time)
+                else:
+                    earliest_event = ProcessEnd(process, end_time)
+                earliest_event.invalidate = True
+
+        return (earliest_time, earliest_event)
 
     def recompute(self, t0): # Recompute all events and states from t0 onwards
         cur_time = t0
@@ -100,9 +185,12 @@ class Timeline():
 
             # Check if there are any bottlenecks between now and then
             next_btime, next_bottleneck = self.check_bottlenecks(cur_time, next_time)
-            if next_btime < next_time:
-                # Do the bottleneck first
+            if next_btime < next_time and next_bottleneck is not None:
+                # Trigger the bottleneck event (process end, task complete, etc.)
+                next_bottleneck.trigger(next_btime, self)
                 cur_time = next_btime
+                ts = self.state_at(cur_time)
+                self.recompute_bottlenecks(ts)
             elif next_event is not None:
                 # Do the event
                 next_event.trigger(next_time, self)
@@ -122,19 +210,19 @@ class Timeline():
 
     # Note - this will call add_timestate to add a timestate to the cache
     def add_event(self, event):
-        bisect.insort(self.events, event, key=lambda e: e.time)
-        event.trigger(event.time, self)
-        self.invalidate_after(event.time)
+        bisect.insort(self.events, event, key=lambda e: e.t)
+        event.trigger(event.t, self)
+        self.invalidate_after(event.t)
 
     # Remove an event from the timeline and invalidate/recompute
     def remove_event(self, event):
         if event in self.events:
-            t = event.time
+            t = event.t
             self.events.remove(event)
             # Clear states at AND after the event time (unlike invalidate_after which keeps states at t)
             self.state_cache = self.state_cache[:bisect.bisect_left(self.state_cache, t, key=lambda e: e.time)]
             # Process remaining events - keep those without invalidate flag
-            i = bisect.bisect_right(self.events, t, key=lambda e: e.time)
+            i = bisect.bisect_right(self.events, t, key=lambda e: e.t)
             head_events = self.events[:i]
             for j in range(i, len(self.events)):
                 if not self.events[j].invalidate:
@@ -151,6 +239,7 @@ class Event():
 
     def __init__(self, name, displayname = None):
         self.name = name
+        self.displayname = displayname if displayname else name
 
     def validate(self, timestate: TimeState, t: float): # Check if this event would be valid to fire at this time and timestate
         return True
@@ -175,38 +264,296 @@ class Event():
     def on_start_effects(self, timeline: Timeline): # Add any other events or consequences when the event fires. 
         pass
 
-class Process(Event): # Ongoing event which converts one resource into another continuously while it exists
-    consumed: List[Tuple[LinearVariable, float]] = None
-    produced: List[Tuple[LinearVariable, float]] = None
-    throttle: float = 1.0 # What fraction of the maximum rate does this process operate at?
+class Process(Event):
+    """Ongoing event which converts one resource into another continuously while active.
 
-    def __init__(self, name, displayname = None):
-        # We should make sure this process is unique
+    When started, modifies the rates of consumed and produced LinearVariables.
+    Automatically creates a ProcessEnd event when consumed resources are depleted.
+    """
+    consumed: List[Tuple[str, float]] = None  # List of (variable_name, rate) pairs
+    produced: List[Tuple[str, float]] = None  # List of (variable_name, rate) pairs
+    throttle: float = 1.0  # What fraction of the maximum rate does this process operate at?
+    end_event: Optional["ProcessEnd"] = None  # Reference to the end event
+
+    def __init__(self, name, displayname=None, consumed=None, produced=None):
         super().__init__(name, displayname)
-        self.consumed = []
-        self.produced = []    
+        self.consumed = consumed or []
+        self.produced = produced or []
+        self.end_event = None
+        self.invalidate = True  # Processes can be invalidated if prerequisites change
 
-class Task(Process): # Event which runs until completion; registers a LinearVariable on trigger, removes it on completion
-    progress: LinearVariable = None
-    rate: float = 0.0
+    def validate(self, timestate: TimeState, t: float) -> bool:
+        """Check if process can start - ensure uniqueness and resource availability."""
+        # Check uniqueness - can't have two processes with same name running
+        for proc in timestate.processes:
+            if proc.name == self.name:
+                return False
 
-    def __init__(self, name, rate, displayname = None):
-        super().__init__(name, displayname)
+        # Check that we have enough of each consumed resource to start
+        for var_name, rate in self.consumed:
+            var = timestate.get_variable(var_name)
+            if var is None:
+                return False
+            # Need at least some amount to start (value > 0 or min)
+            if isinstance(var, LinearVariable):
+                if var.get(t) <= var.min:
+                    return False
+
+        return True
+
+    def on_start_vars(self, timestate: TimeState):
+        """Modify variable rates when process starts."""
+        # Decrease rates for consumed resources
+        for var_name, rate in self.consumed:
+            var = timestate.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                var.rate -= rate * self.throttle
+
+        # Increase rates for produced resources
+        for var_name, rate in self.produced:
+            var = timestate.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                var.rate += rate * self.throttle
+
+        # Add this process to the active processes list
+        timestate.processes.append(self)
+
+    def on_start_effects(self, timeline: Timeline):
+        """Schedule the end event based on resource depletion."""
+        self._schedule_end_event(timeline)
+
+    def _schedule_end_event(self, timeline: Timeline):
+        """Calculate when this process will end and schedule the end event."""
+        ts = timeline.state_at(self.t)
+
+        # Find the earliest time when any consumed resource hits zero
+        end_time = None
+
+        for var_name, rate in self.consumed:
+            var = ts.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                # When will this variable hit its minimum?
+                zero_time = var.when(var.min)
+                if zero_time is not None and zero_time > self.t:
+                    if end_time is None or zero_time < end_time:
+                        end_time = zero_time
+
+        # If there's an end time, create the end event
+        # Don't add to timeline.events - check_bottlenecks will find it via process.end_event
+        if end_time is not None:
+            self.end_event = ProcessEnd(self, end_time)
+            self.end_event.invalidate = True  # Will be recalculated on timeline changes
+
+    def cancel(self, t: float, timeline: Timeline):
+        """Cancel this process at time t (player-initiated stop)."""
+        if self.end_event:
+            # Move the end event to now
+            timeline.events.remove(self.end_event)
+        self.end_event = ProcessEnd(self, t, is_action=True)
+        import bisect
+        bisect.insort(timeline.events, self.end_event, key=lambda e: e.t)
+        timeline.invalidate_after(t)
+
+
+class ProcessEnd(Event):
+    """Event that stops a running Process and reverts its rate changes."""
+    process: Process = None
+    is_system_generated: bool = True  # True if auto-generated, False if player-cancelled
+
+    def __init__(self, process: Process, t: float, is_action: bool = False):
+        super().__init__(f"{process.name}_end", f"End {process.displayname or process.name}")
+        self.process = process
+        self.t = t
+        self.is_action = is_action
+        self.is_system_generated = not is_action
+        self.invalidate = True  # Recalculate on timeline changes
+
+    def validate(self, timestate: TimeState, t: float) -> bool:
+        """End event is valid if the process is still running."""
+        return any(p.name == self.process.name for p in timestate.processes)
+
+    def on_start_vars(self, timestate: TimeState):
+        """Revert the rate changes from the process."""
+        # Restore rates for consumed resources
+        for var_name, rate in self.process.consumed:
+            var = timestate.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                var.rate += rate * self.process.throttle
+
+        # Restore rates for produced resources
+        for var_name, rate in self.process.produced:
+            var = timestate.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                var.rate -= rate * self.process.throttle
+
+        # Remove process from active processes (by name, since processes are deepcopied)
+        timestate.processes = [p for p in timestate.processes if p.name != self.process.name]
+
+
+class Task(Process):
+    """Process that runs until completion; creates a progress LinearVariable.
+
+    Tasks have a fixed duration based on their progress rate. When progress
+    reaches 100, the task completes and triggers on_finish_vars/on_finish_effects.
+    """
+    progress_var: LinearVariable = None
+    rate: float = 0.0  # Progress rate (progress units per time unit, 100 = complete)
+
+    def __init__(self, name, rate, displayname=None, consumed=None, produced=None):
+        super().__init__(name, displayname, consumed, produced)
         self.rate = rate
+        self.progress_var = None
 
-    def trigger(self, t: float, timeline: Timeline):
-        # Make sure this task is unique
-        ts = timeline.state_at(t)
-        if ts.get_variable(self.name+"_progress"): # Task already exists
-            return
-        
-        super().trigger(t, timeline)
+    def validate(self, timestate: TimeState, t: float) -> bool:
+        """Check if task can start - also check that task isn't already running."""
+        # Check for existing progress variable (task already running)
+        if timestate.get_variable(self.name + "_progress"):
+            return False
 
-        ts = timeline.state_at(t)
-        ts.add_variable(LinearVariable(self.name+"_progress", 0, min=0, max=100, rate=self.rate))
+        return super().validate(timestate, t)
+
+    def on_start_vars(self, timestate: TimeState):
+        """Create progress variable and apply process rate changes."""
+        super().on_start_vars(timestate)
+
+        # Create the progress variable
+        self.progress_var = LinearVariable(
+            self.name + "_progress",
+            value=0,
+            min=0,
+            max=100,
+            rate=self.rate
+        )
+        self.progress_var.t0 = timestate.time
+        timestate.add_variable(self.progress_var)
+
+    def on_start_effects(self, timeline: Timeline):
+        """Schedule task completion or resource depletion end."""
+        ts = timeline.state_at(self.t)
+
+        # Calculate completion time from progress
+        progress_var = ts.get_variable(self.name + "_progress")
+        completion_time = progress_var.when(100) if progress_var else None
+
+        # Calculate earliest resource depletion time
+        depletion_time = None
+        for var_name, rate in self.consumed:
+            var = ts.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                zero_time = var.when(var.min)
+                if zero_time is not None and zero_time > self.t:
+                    if depletion_time is None or zero_time < depletion_time:
+                        depletion_time = zero_time
+
+        # Determine which comes first
+        if completion_time is not None:
+            if depletion_time is None or completion_time <= depletion_time:
+                # Task completes before resources run out
+                self.end_event = TaskComplete(self, completion_time)
+            else:
+                # Resources deplete before task completes (interrupt)
+                self.end_event = TaskInterrupt(self, depletion_time)
+        elif depletion_time is not None:
+            # Resources deplete (shouldn't happen without completion, but handle it)
+            self.end_event = TaskInterrupt(self, depletion_time)
+
+        # Don't add to timeline.events - check_bottlenecks will find it via process.end_event
+        if self.end_event:
+            self.end_event.invalidate = True
 
     def on_finish_vars(self, timestate: TimeState):
+        """Override in subclasses to apply effects when task completes."""
         pass
 
     def on_finish_effects(self, timeline: Timeline):
+        """Override in subclasses to add follow-up events on completion."""
         pass
+
+
+class TaskComplete(Event):
+    """Event that fires when a Task reaches 100% progress."""
+    task: Task = None
+
+    def __init__(self, task: Task, t: float):
+        super().__init__(f"{task.name}_complete", f"Complete {task.displayname or task.name}")
+        self.task = task
+        self.t = t
+        self.is_action = False  # Completion cannot be deleted by player
+        self.invalidate = True  # Recalculate on timeline changes
+
+    def validate(self, timestate: TimeState, t: float) -> bool:
+        """Completion is valid if the task is running and progress >= 100."""
+        progress = timestate.get_variable(self.task.name + "_progress")
+        if not progress:
+            return False
+        return progress.get(t) >= 100
+
+    def on_start_vars(self, timestate: TimeState):
+        """Revert process rates and apply task completion effects."""
+        # Restore rates for consumed resources
+        for var_name, rate in self.task.consumed:
+            var = timestate.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                var.rate += rate * self.task.throttle
+
+        # Restore rates for produced resources
+        for var_name, rate in self.task.produced:
+            var = timestate.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                var.rate -= rate * self.task.throttle
+
+        # Remove process from active processes (by name, since processes are deepcopied)
+        timestate.processes = [p for p in timestate.processes if p.name != self.task.name]
+
+        # Remove progress variable (task is done)
+        if self.task.name + "_progress" in timestate.registry:
+            del timestate.registry[self.task.name + "_progress"]
+
+        # Apply task-specific completion effects
+        self.task.on_finish_vars(timestate)
+
+    def on_start_effects(self, timeline: Timeline):
+        """Apply task-specific follow-up effects."""
+        self.task.on_finish_effects(timeline)
+
+
+class TaskInterrupt(Event):
+    """Event that fires when a Task is interrupted (resources depleted or cancelled)."""
+    task: Task = None
+    is_player_cancel: bool = False
+
+    def __init__(self, task: Task, t: float, is_player_cancel: bool = False):
+        super().__init__(
+            f"{task.name}_interrupt",
+            f"{'Cancel' if is_player_cancel else 'Interrupt'} {task.displayname or task.name}"
+        )
+        self.task = task
+        self.t = t
+        self.is_action = is_player_cancel
+        self.is_player_cancel = is_player_cancel
+        self.invalidate = True
+
+    def validate(self, timestate: TimeState, t: float) -> bool:
+        """Interrupt is valid if the task is running."""
+        return any(p.name == self.task.name for p in timestate.processes)
+
+    def on_start_vars(self, timestate: TimeState):
+        """Revert process rates (task did not complete)."""
+        # Restore rates for consumed resources
+        for var_name, rate in self.task.consumed:
+            var = timestate.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                var.rate += rate * self.task.throttle
+
+        # Restore rates for produced resources
+        for var_name, rate in self.task.produced:
+            var = timestate.get_variable(var_name)
+            if var and isinstance(var, LinearVariable):
+                var.rate -= rate * self.task.throttle
+
+        # Remove process from active processes (by name, since processes are deepcopied)
+        timestate.processes = [p for p in timestate.processes if p.name != self.task.name]
+
+        # Remove progress variable (task is incomplete but stopped)
+        if self.task.name + "_progress" in timestate.registry:
+            del timestate.registry[self.task.name + "_progress"]

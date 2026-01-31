@@ -10,7 +10,7 @@ from tkinter import ttk
 from typing import List, Tuple, Optional, TYPE_CHECKING
 
 from gamestate import GameState
-from timeline import Event, Process, Task
+from timeline import Event, Process, Task, ProcessEnd, TaskComplete, TaskInterrupt
 
 if TYPE_CHECKING:
     from app_gui import TimescrubberApp
@@ -248,39 +248,130 @@ class TimelinePanel(ttk.Frame):
         """Draw events on the timeline."""
         baseline_y = height - 20
         event_y = baseline_y - 35
+        process_y = baseline_y - 20  # Y position for process bars
 
         events = self.gamestate.timeline.events
 
+        # First pass: draw process/task spans (bars connecting start to end)
+        drawn_spans = set()  # Track which processes we've drawn spans for
+        for event in events:
+            if isinstance(event, (Process, Task)) and not isinstance(event, (ProcessEnd, TaskComplete, TaskInterrupt)):
+                if event.name in drawn_spans:
+                    continue
+                drawn_spans.add(event.name)
+
+                # Find the end event for this process/task
+                end_time = None
+                end_event = getattr(event, 'end_event', None)
+                if end_event:
+                    end_time = end_event.t
+
+                # Skip if completely out of view
+                start_x = self._time_to_x(event.t)
+                end_x = self._time_to_x(end_time) if end_time else start_x
+
+                if end_x < self.PADDING - 50 or start_x > self.canvas.winfo_width() - self.PADDING + 50:
+                    continue
+
+                # Clamp to visible area
+                start_x = max(self.PADDING, start_x)
+                if end_time:
+                    end_x = min(self.canvas.winfo_width() - self.PADDING, end_x)
+
+                # Determine colors based on type
+                if isinstance(event, Task):
+                    bar_color = "#A5D6A7"  # Light green for task span
+                    outline_color = "#4CAF50"  # Green
+                else:
+                    bar_color = "#90CAF9"  # Light blue for process span
+                    outline_color = "#2196F3"  # Blue
+
+                # Draw the span bar
+                if end_time and end_x > start_x:
+                    self.canvas.create_rectangle(
+                        start_x, process_y - 4,
+                        end_x, process_y + 4,
+                        fill=bar_color, outline=outline_color, width=2
+                    )
+
+        # Second pass: draw event markers
         for event in events:
             # Skip if out of view
-            if event.t < self.view_start - 5 or event.t > self.view_start + self.view_duration + 5:
+            view_end = self.view_start + self.view_duration
+            if event.t < self.view_start - 5 or event.t > view_end + 5:
                 continue
 
             x = self._time_to_x(event.t)
 
-            # Determine color based on event type
-            if isinstance(event, Task):
-                color = "#4CAF50"  # Green for tasks
+            # Determine color and shape based on event type
+            if isinstance(event, TaskComplete):
+                # Green diamond for task completion
+                self._draw_diamond(x, event_y, "#4CAF50", "darkgreen")
+                name = event.displayname or "Complete"
+            elif isinstance(event, TaskInterrupt):
+                # Red X for task interrupt
+                self._draw_x_marker(x, event_y, "#F44336")
+                name = event.displayname or "Interrupt"
+            elif isinstance(event, ProcessEnd):
+                # Blue square for process end
+                self.canvas.create_rectangle(
+                    x - 5, event_y - 5,
+                    x + 5, event_y + 5,
+                    fill="#2196F3", outline="darkblue"
+                )
+                name = event.displayname or "End"
+            elif isinstance(event, Task):
+                # Green circle for task start
+                self.canvas.create_oval(
+                    x - 6, event_y - 6,
+                    x + 6, event_y + 6,
+                    fill="#4CAF50", outline="black"
+                )
+                name = event.displayname or event.name or "Task"
             elif isinstance(event, Process):
-                color = "#2196F3"  # Blue for processes
+                # Blue circle for process start
+                self.canvas.create_oval(
+                    x - 6, event_y - 6,
+                    x + 6, event_y + 6,
+                    fill="#2196F3", outline="black"
+                )
+                name = event.displayname or event.name or "Process"
             else:
-                color = "#FF9800"  # Orange for generic events
-
-            # Draw event marker
-            self.canvas.create_oval(
-                x - 6, event_y - 6,
-                x + 6, event_y + 6,
-                fill=color, outline="black"
-            )
+                # Orange circle for generic events
+                self.canvas.create_oval(
+                    x - 6, event_y - 6,
+                    x + 6, event_y + 6,
+                    fill="#FF9800", outline="black"
+                )
+                name = event.displayname or event.name or "Event"
 
             # Draw connector to baseline
             self.canvas.create_line(x, event_y + 6, x, baseline_y,
                                     fill="gray", dash=(2, 2))
 
-            # Draw event name
-            name = event.displayname or event.name or "Event"
-            self.canvas.create_text(x, event_y - 12, text=name,
-                                    anchor="s", font=("TkDefaultFont", 8))
+            # Draw event name (skip for end events to reduce clutter)
+            if not isinstance(event, (ProcessEnd, TaskComplete, TaskInterrupt)):
+                self.canvas.create_text(x, event_y - 12, text=name,
+                                        anchor="s", font=("TkDefaultFont", 8))
+
+    def _draw_diamond(self, x: float, y: float, fill: str, outline: str):
+        """Draw a diamond shape marker."""
+        size = 6
+        self.canvas.create_polygon(
+            x, y - size,
+            x + size, y,
+            x, y + size,
+            x - size, y,
+            fill=fill, outline=outline
+        )
+
+    def _draw_x_marker(self, x: float, y: float, color: str):
+        """Draw an X shape marker."""
+        size = 5
+        self.canvas.create_line(x - size, y - size, x + size, y + size,
+                                fill=color, width=2)
+        self.canvas.create_line(x - size, y + size, x + size, y - size,
+                                fill=color, width=2)
 
     def _draw_state_markers(self, height: int):
         """Draw markers for cached states."""
