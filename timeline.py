@@ -562,7 +562,10 @@ class TaskInterrupt(Event):
         self.t = t
         self.is_action = is_player_cancel
         self.is_player_cancel = is_player_cancel
-        self.invalidate = True
+        if self.is_player_cancel:
+            self.invalidate = False
+        else:
+            self.invalidate = True
 
     def validate(self, timestate: TimeState, t: float) -> bool:
         """Interrupt is valid if the task is running."""
@@ -581,6 +584,11 @@ class TaskInterrupt(Event):
             var = timestate.get_variable(var_name)
             if var and isinstance(var, LinearVariable):
                 var.rate -= rate * self.task.throttle
+
+    def on_start_effects(self, timeline: Timeline):
+        print("Executed on_start_effects for TaskInterrupt")
+
+        timestate = timeline.state_at(self.t)
 
         # Remove process from active processes (by name, since processes are deepcopied)
         timestate.processes = [p for p in timestate.processes if p.name != self.task.name]
