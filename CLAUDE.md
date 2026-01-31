@@ -171,10 +171,8 @@ from timeline import TimeState, Timeline, Event
 
 ## Known Issues / Missing Pieces
 
-1. **`Timeline.add_timestate()`** - Called in `Event.trigger()` but not defined on Timeline class
-2. **`Registry.keys()`** - Called in `TimeState.copy()` but not defined on Registry class
-3. **`check_bottlenecks()`** - Called in `recompute()` but only stubbed (returns nothing)
-4. **`recompute_bottlenecks()`** - Stubbed as `pass`
+1. **`check_bottlenecks()`** - Called in `recompute()` but only stubbed (returns nothing)
+2. **`recompute_bottlenecks()`** - Stubbed as `pass`
 
 ## Development Guidelines
 
@@ -205,9 +203,8 @@ python3 main.py
 
 ## Future Development Priorities
 
-1. Fix missing methods (`add_timestate`, `Registry.keys`)
-2. Choose and implement GUI framework
-3. Implement bottleneck system
-4. Populate `gamedefs.py` with game content
-5. Add save/load persistence
-6. Create test suite
+1. Choose and implement GUI framework
+2. Implement bottleneck system
+3. Populate `gamedefs.py` with game content
+4. Add save/load persistence
+5. Create test suite
