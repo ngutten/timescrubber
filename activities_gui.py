@@ -157,9 +157,7 @@ class ActivitiesScreen(ttk.Frame):
             # Add the task to the timeline
             self.gamestate.timeline.add_event(task)
             print(f"Started activity: {activity_name} at t={current_time}")
-
-            # Refresh the display
-            self.app.update_display()
+            # Display updates automatically on next update loop
         else:
             print(f"Failed to create task for: {activity_name}")
 
