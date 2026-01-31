@@ -4,11 +4,12 @@ class Variable():
     value: float = 0.0
     name: str = ""
     displayname: str = ""
-    tags: List[str] = []
+    tags: List[str] = None
 
     def __init__(self, name, value=0, displayname=None):
         self.name = name
         self.value = value
+        self.tags = []
         if displayname:
             self.displayname = displayname
 
