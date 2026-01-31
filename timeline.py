@@ -120,7 +120,9 @@ class Timeline():
             progress_var = ts.get_variable(process.name + "_progress")
             if progress_var:
                 completion_time = progress_var.when(100)
-                if completion_time is not None and completion_time <= t:
+                # Only filter out if completion time is strictly before t
+                # (at t means it completes now and we should handle it)
+                if completion_time is not None and completion_time < t:
                     completion_time = None  # Already completed
 
         # Check consumed resources for depletion
@@ -164,7 +166,17 @@ class Timeline():
         for process in ts.processes:
             end_time, end_type = self._calculate_process_end(process, ts, t0)
 
-            if end_time is not None and t0 < end_time < earliest_time:
+            # Use <= to handle events at exactly t0 (but only if not yet processed)
+            # Check if this process already has a triggered end event at this time
+            already_triggered = False
+            for ev in self.events:
+                if isinstance(ev, (TaskComplete, TaskInterrupt, ProcessEnd)):
+                    ev_process = getattr(ev, 'task', None) or getattr(ev, 'process', None)
+                    if ev_process and ev_process.name == process.name and ev.t == end_time:
+                        already_triggered = True
+                        break
+
+            if end_time is not None and not already_triggered and t0 <= end_time < earliest_time:
                 earliest_time = end_time
                 # Create the appropriate end event
                 if end_type == "complete":
@@ -185,13 +197,20 @@ class Timeline():
 
             # Check if there are any bottlenecks between now and then
             next_btime, next_bottleneck = self.check_bottlenecks(cur_time, next_time)
-            if next_btime < next_time and next_bottleneck is not None:
+            if next_btime <= next_time and next_bottleneck is not None:
+                # Add the bottleneck event to the events list so it shows on timeline
+                bisect.insort(self.events, next_bottleneck, key=lambda e: e.t)
                 # Trigger the bottleneck event (process end, task complete, etc.)
-                next_bottleneck.trigger(next_btime, self)
-                cur_time = next_btime
-                ts = self.state_at(cur_time)
-                self.recompute_bottlenecks(ts)
-            elif next_event is not None:
+                triggered = next_bottleneck.trigger(next_btime, self)
+                if not triggered:
+                    # Validation failed, remove the event
+                    self.events.remove(next_bottleneck)
+                else:
+                    cur_time = next_btime
+                    ts = self.state_at(cur_time)
+                    self.recompute_bottlenecks(ts)
+                    continue
+            if next_event is not None:
                 # Do the event
                 next_event.trigger(next_time, self)
                 cur_time = next_time

@@ -24,6 +24,8 @@ class TimelinePanel(ttk.Frame):
     MARKER_HEIGHT = 40
     EVENT_HEIGHT = 20
     PADDING = 20
+    BAR_HEIGHT = 8  # Height of each process/task bar
+    BAR_SPACING = 10  # Vertical spacing between overlapping bars
 
     def __init__(self, parent, gamestate: GameState, app: "TimescrubberApp"):
         super().__init__(parent)
@@ -37,6 +39,11 @@ class TimelinePanel(ttk.Frame):
         self.drag_start_x = 0
         self.drag_start_time = 0.0
 
+        # Event tracking for hover/click
+        self.event_hitboxes = []  # List of (x1, y1, x2, y2, event) for click detection
+        self.hovered_event = None
+        self.popup_window = None
+
         self._create_widgets()
         self._bind_events()
 
@@ -47,7 +54,7 @@ class TimelinePanel(ttk.Frame):
         # Control bar
         controls = ttk.Frame(self)
         controls.grid(row=0, column=0, sticky="ew", pady=(0, 5))
-        controls.grid_columnconfigure(2, weight=1)
+        controls.grid_columnconfigure(3, weight=1)
 
         ttk.Label(controls, text="Timeline").grid(row=0, column=0, sticky="w")
 
@@ -57,9 +64,13 @@ class TimelinePanel(ttk.Frame):
         ttk.Button(controls, text="+", width=3,
                    command=self._zoom_in).grid(row=0, column=2, sticky="w")
 
+        # Clear future events button
+        ttk.Button(controls, text="Clear Future",
+                   command=self._clear_future_events).grid(row=0, column=3, padx=(10, 0))
+
         # View range label
         self.range_label = ttk.Label(controls, text="View: 0 - 100")
-        self.range_label.grid(row=0, column=3, sticky="e", padx=(10, 0))
+        self.range_label.grid(row=0, column=4, sticky="e", padx=(10, 0))
 
         # Canvas for timeline
         self.canvas = tk.Canvas(
@@ -80,6 +91,9 @@ class TimelinePanel(ttk.Frame):
         self.canvas.bind("<Button-4>", self._on_scroll)  # Linux scroll up
         self.canvas.bind("<Button-5>", self._on_scroll)  # Linux scroll down
         self.canvas.bind("<Configure>", self._on_resize)
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", self._on_leave)
+        self.canvas.bind("<Button-3>", self._on_right_click)  # Right-click
 
     def _time_to_x(self, t: float) -> float:
         """Convert time to canvas x coordinate."""
@@ -248,9 +262,42 @@ class TimelinePanel(ttk.Frame):
         """Draw events on the timeline."""
         baseline_y = height - 20
         event_y = baseline_y - 35
-        process_y = baseline_y - 20  # Y position for process bars
+        base_process_y = baseline_y - 20  # Base Y position for process bars
 
         events = self.gamestate.timeline.events
+
+        # Clear hitboxes for new frame
+        self.event_hitboxes = []
+
+        # Collect all process/task spans to calculate overlaps
+        spans = []
+        for event in events:
+            if isinstance(event, (Process, Task)) and not isinstance(event, (ProcessEnd, TaskComplete, TaskInterrupt)):
+                end_time = None
+                end_event = getattr(event, 'end_event', None)
+                if end_event:
+                    end_time = end_event.t
+                spans.append((event.t, end_time or event.t, event))
+
+        # Assign vertical offsets to avoid overlaps
+        span_offsets = {}
+        for start_t, end_t, event in sorted(spans, key=lambda x: x[0]):
+            # Find the lowest offset that doesn't overlap with existing spans
+            offset = 0
+            while True:
+                overlaps = False
+                for other_start, other_end, other_event in spans:
+                    if other_event.name == event.name:
+                        continue
+                    if other_event.name in span_offsets and span_offsets[other_event.name] == offset:
+                        # Check if time ranges overlap
+                        if not (end_t <= other_start or start_t >= other_end):
+                            overlaps = True
+                            break
+                if not overlaps:
+                    break
+                offset += 1
+            span_offsets[event.name] = offset
 
         # First pass: draw process/task spans (bars connecting start to end)
         drawn_spans = set()  # Track which processes we've drawn spans for
@@ -274,11 +321,16 @@ class TimelinePanel(ttk.Frame):
                     continue
 
                 # Clamp to visible area
-                start_x = max(self.PADDING, start_x)
+                draw_start_x = max(self.PADDING, start_x)
+                draw_end_x = end_x
                 if end_time:
-                    end_x = min(self.canvas.winfo_width() - self.PADDING, end_x)
+                    draw_end_x = min(self.canvas.winfo_width() - self.PADDING, end_x)
 
-                # Determine colors based on type
+                # Calculate Y position based on offset
+                offset = span_offsets.get(event.name, 0)
+                process_y = base_process_y - (offset * self.BAR_SPACING)
+
+                # Determine colors based on type and hover state
                 if isinstance(event, Task):
                     bar_color = "#A5D6A7"  # Light green for task span
                     outline_color = "#4CAF50"  # Green
@@ -286,13 +338,25 @@ class TimelinePanel(ttk.Frame):
                     bar_color = "#90CAF9"  # Light blue for process span
                     outline_color = "#2196F3"  # Blue
 
+                # Highlight if hovered
+                if self.hovered_event and self.hovered_event.name == event.name:
+                    bar_color = "#FFEB3B"  # Yellow highlight
+                    outline_color = "#FFC107"
+
                 # Draw the span bar
-                if end_time and end_x > start_x:
+                half_bar = self.BAR_HEIGHT // 2
+                if end_time and draw_end_x > draw_start_x:
                     self.canvas.create_rectangle(
-                        start_x, process_y - 4,
-                        end_x, process_y + 4,
+                        draw_start_x, process_y - half_bar,
+                        draw_end_x, process_y + half_bar,
                         fill=bar_color, outline=outline_color, width=2
                     )
+                    # Add hitbox for the bar
+                    self.event_hitboxes.append((
+                        draw_start_x, process_y - half_bar,
+                        draw_end_x, process_y + half_bar,
+                        event
+                    ))
 
         # Second pass: draw event markers
         for event in events:
@@ -303,55 +367,80 @@ class TimelinePanel(ttk.Frame):
 
             x = self._time_to_x(event.t)
 
+            # Adjust marker Y based on span offset if applicable
+            marker_y = event_y
+            if hasattr(event, 'name') and event.name in span_offsets:
+                marker_y = event_y - (span_offsets[event.name] * self.BAR_SPACING)
+            elif hasattr(event, 'task') and event.task.name in span_offsets:
+                marker_y = event_y - (span_offsets[event.task.name] * self.BAR_SPACING)
+            elif hasattr(event, 'process') and event.process.name in span_offsets:
+                marker_y = event_y - (span_offsets[event.process.name] * self.BAR_SPACING)
+
             # Determine color and shape based on event type
             if isinstance(event, TaskComplete):
                 # Green diamond for task completion
-                self._draw_diamond(x, event_y, "#4CAF50", "darkgreen")
+                self._draw_diamond(x, marker_y, "#4CAF50", "darkgreen")
                 name = event.displayname or "Complete"
+                self.event_hitboxes.append((x - 6, marker_y - 6, x + 6, marker_y + 6, event))
             elif isinstance(event, TaskInterrupt):
                 # Red X for task interrupt
-                self._draw_x_marker(x, event_y, "#F44336")
+                self._draw_x_marker(x, marker_y, "#F44336")
                 name = event.displayname or "Interrupt"
+                self.event_hitboxes.append((x - 6, marker_y - 6, x + 6, marker_y + 6, event))
             elif isinstance(event, ProcessEnd):
                 # Blue square for process end
                 self.canvas.create_rectangle(
-                    x - 5, event_y - 5,
-                    x + 5, event_y + 5,
+                    x - 5, marker_y - 5,
+                    x + 5, marker_y + 5,
                     fill="#2196F3", outline="darkblue"
                 )
                 name = event.displayname or "End"
+                self.event_hitboxes.append((x - 5, marker_y - 5, x + 5, marker_y + 5, event))
             elif isinstance(event, Task):
                 # Green circle for task start
                 self.canvas.create_oval(
-                    x - 6, event_y - 6,
-                    x + 6, event_y + 6,
+                    x - 6, marker_y - 6,
+                    x + 6, marker_y + 6,
                     fill="#4CAF50", outline="black"
                 )
                 name = event.displayname or event.name or "Task"
+                self.event_hitboxes.append((x - 6, marker_y - 6, x + 6, marker_y + 6, event))
             elif isinstance(event, Process):
                 # Blue circle for process start
                 self.canvas.create_oval(
-                    x - 6, event_y - 6,
-                    x + 6, event_y + 6,
+                    x - 6, marker_y - 6,
+                    x + 6, marker_y + 6,
                     fill="#2196F3", outline="black"
                 )
                 name = event.displayname or event.name or "Process"
+                self.event_hitboxes.append((x - 6, marker_y - 6, x + 6, marker_y + 6, event))
             else:
                 # Orange circle for generic events
                 self.canvas.create_oval(
-                    x - 6, event_y - 6,
-                    x + 6, event_y + 6,
+                    x - 6, marker_y - 6,
+                    x + 6, marker_y + 6,
                     fill="#FF9800", outline="black"
                 )
                 name = event.displayname or event.name or "Event"
+                self.event_hitboxes.append((x - 6, marker_y - 6, x + 6, marker_y + 6, event))
+
+            # Calculate baseline connector Y based on offset
+            offset = 0
+            if hasattr(event, 'name') and event.name in span_offsets:
+                offset = span_offsets[event.name]
+            elif hasattr(event, 'task') and event.task.name in span_offsets:
+                offset = span_offsets[event.task.name]
+            elif hasattr(event, 'process') and event.process.name in span_offsets:
+                offset = span_offsets[event.process.name]
+            connector_baseline = baseline_y - (offset * self.BAR_SPACING)
 
             # Draw connector to baseline
-            self.canvas.create_line(x, event_y + 6, x, baseline_y,
+            self.canvas.create_line(x, marker_y + 6, x, connector_baseline,
                                     fill="gray", dash=(2, 2))
 
             # Draw event name (skip for end events to reduce clutter)
             if not isinstance(event, (ProcessEnd, TaskComplete, TaskInterrupt)):
-                self.canvas.create_text(x, event_y - 12, text=name,
+                self.canvas.create_text(x, marker_y - 12, text=name,
                                         anchor="s", font=("TkDefaultFont", 8))
 
     def _draw_diamond(self, x: float, y: float, fill: str, outline: str):
@@ -415,3 +504,129 @@ class TimelinePanel(ttk.Frame):
         self.canvas.create_text(x, 25, text=f"{current_time:.1f}",
                                 anchor="n", fill="red",
                                 font=("TkDefaultFont", 9, "bold"))
+
+    def _on_motion(self, event):
+        """Handle mouse motion for hover effects."""
+        x, y = event.x, event.y
+        hovered = None
+
+        # Check if hovering over any event hitbox
+        for x1, y1, x2, y2, ev in self.event_hitboxes:
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                hovered = ev
+                break
+
+        if hovered != self.hovered_event:
+            self.hovered_event = hovered
+            self._update_popup(event)
+
+    def _on_leave(self, event):
+        """Handle mouse leaving the canvas."""
+        self.hovered_event = None
+        self._hide_popup()
+
+    def _update_popup(self, event):
+        """Show or update the popup window for hovered event."""
+        self._hide_popup()
+
+        if not self.hovered_event:
+            return
+
+        ev = self.hovered_event
+
+        # Create popup window
+        self.popup_window = tk.Toplevel(self.winfo_toplevel())
+        self.popup_window.wm_overrideredirect(True)
+        self.popup_window.wm_attributes("-topmost", True)
+
+        # Position near mouse
+        x = self.winfo_rootx() + event.x + 15
+        y = self.winfo_rooty() + event.y + 15
+        self.popup_window.wm_geometry(f"+{x}+{y}")
+
+        # Create popup content
+        frame = ttk.Frame(self.popup_window, padding=5)
+        frame.pack()
+
+        # Event info
+        name = ev.displayname or ev.name or "Event"
+        ttk.Label(frame, text=name, font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        ttk.Label(frame, text=f"Time: {ev.t:.2f}").pack(anchor="w")
+
+        # Event type
+        if isinstance(ev, TaskComplete):
+            event_type = "Task Complete"
+        elif isinstance(ev, TaskInterrupt):
+            event_type = "Task Interrupted"
+        elif isinstance(ev, ProcessEnd):
+            event_type = "Process End"
+        elif isinstance(ev, Task):
+            event_type = "Task"
+            # Show progress info if available
+            end_event = getattr(ev, 'end_event', None)
+            if end_event:
+                duration = end_event.t - ev.t
+                ttk.Label(frame, text=f"Duration: {duration:.1f}").pack(anchor="w")
+        elif isinstance(ev, Process):
+            event_type = "Process"
+        else:
+            event_type = "Event"
+
+        ttk.Label(frame, text=f"Type: {event_type}", foreground="gray").pack(anchor="w")
+
+        if ev.is_action:
+            ttk.Label(frame, text="(Player-created)", foreground="blue").pack(anchor="w")
+            ttk.Label(frame, text="Right-click to delete", foreground="gray",
+                     font=("TkDefaultFont", 8, "italic")).pack(anchor="w")
+
+    def _hide_popup(self):
+        """Hide the popup window."""
+        if self.popup_window:
+            self.popup_window.destroy()
+            self.popup_window = None
+
+    def _on_right_click(self, event):
+        """Handle right-click for context menu."""
+        x, y = event.x, event.y
+        clicked_event = None
+
+        # Check if clicking on any event hitbox
+        for x1, y1, x2, y2, ev in self.event_hitboxes:
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                clicked_event = ev
+                break
+
+        if not clicked_event:
+            return
+
+        # Only allow deletion of player-created events (is_action=True)
+        # And only for start events (Task, Process), not end events
+        if clicked_event.is_action and isinstance(clicked_event, (Task, Process)) and not isinstance(clicked_event, (ProcessEnd, TaskComplete, TaskInterrupt)):
+            # Create context menu
+            menu = tk.Menu(self.canvas, tearoff=0)
+            menu.add_command(
+                label=f"Delete '{clicked_event.displayname or clicked_event.name}'",
+                command=lambda: self._delete_event(clicked_event)
+            )
+            menu.tk_popup(event.x_root, event.y_root)
+
+    def _delete_event(self, event):
+        """Delete a player-created event from the timeline."""
+        self._hide_popup()
+        self.gamestate.timeline.remove_event(event)
+
+    def _clear_future_events(self):
+        """Clear all player-created future events from the current time."""
+        current_time = self.app.current_time
+        events_to_remove = []
+
+        # Find all player-created events in the future
+        for event in self.gamestate.timeline.events:
+            if event.t > current_time and event.is_action:
+                # Only remove start events (Task, Process), not system-generated end events
+                if isinstance(event, (Task, Process)) and not isinstance(event, (ProcessEnd, TaskComplete, TaskInterrupt)):
+                    events_to_remove.append(event)
+
+        # Remove them (in reverse order to avoid index issues)
+        for event in reversed(events_to_remove):
+            self.gamestate.timeline.remove_event(event)

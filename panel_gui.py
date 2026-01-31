@@ -24,7 +24,7 @@ class ResourcePanel(ttk.Frame):
         self.gamestate = gamestate
         self.app = app
         self.resource_labels: Dict[str, Dict[str, ttk.Label]] = {}
-        self.task_labels: Dict[str, ttk.Label] = {}
+        self.task_widgets: Dict[str, Dict] = {}  # Stores task frames and their widgets for reuse
 
         # Prevent the frame from shrinking
         self.grid_propagate(False)
@@ -228,39 +228,101 @@ class ResourcePanel(ttk.Frame):
         self._update_tasks(state, current_time)
 
     def _update_tasks(self, state, current_time: float):
-        """Update the active tasks display."""
-        # Clear existing task labels
-        for widget in self.tasks_inner.winfo_children():
-            widget.destroy()
-        self.task_labels.clear()
-
-        # Find progress variables (tasks in progress)
-        row = 0
+        """Update the active tasks display without recreating widgets."""
+        # Find current active tasks
+        active_tasks = {}
         for name in state.registry.keys():
             if name.endswith("_progress"):
                 var = state.registry.get_variable(name)
                 if isinstance(var, LinearVariable):
                     task_name = name.replace("_progress", "")
                     progress = var.get(current_time)
+                    active_tasks[task_name] = progress
 
-                    # Task frame
-                    task_frame = ttk.Frame(self.tasks_inner)
-                    task_frame.grid(row=row, column=0, sticky="ew", pady=2)
-                    task_frame.grid_columnconfigure(0, weight=1)
+        # Remove widgets for tasks that are no longer active
+        tasks_to_remove = [name for name in self.task_widgets if name not in active_tasks]
+        for name in tasks_to_remove:
+            widgets = self.task_widgets.pop(name)
+            widgets["frame"].destroy()
 
-                    # Task name
-                    ttk.Label(task_frame, text=task_name).grid(row=0, column=0, sticky="w")
+        # Update or create widgets for active tasks
+        row = 0
+        for task_name, progress in active_tasks.items():
+            # Look up displayname from the timeline events
+            displayname = task_name
+            for event in self.gamestate.timeline.events:
+                if hasattr(event, 'name') and event.name == task_name:
+                    displayname = event.displayname or task_name
+                    break
 
-                    # Progress percentage
-                    ttk.Label(task_frame, text=f"{progress:.1f}%").grid(row=0, column=1, sticky="e")
+            if task_name in self.task_widgets:
+                # Update existing widgets
+                widgets = self.task_widgets[task_name]
+                widgets["name_label"].configure(text=displayname)
+                widgets["progress_label"].configure(text=f"{progress:.1f}%")
+                widgets["progress_bar"]["value"] = min(progress, 100)
+                widgets["frame"].grid(row=row, column=0, sticky="ew", pady=2)
+            else:
+                # Create new widgets
+                task_frame = ttk.Frame(self.tasks_inner)
+                task_frame.grid(row=row, column=0, sticky="ew", pady=2)
+                task_frame.grid_columnconfigure(0, weight=1)
 
-                    # Progress bar
-                    prog_bar = ttk.Progressbar(task_frame, length=200, mode="determinate")
-                    prog_bar["value"] = min(progress, 100)
-                    prog_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
+                # Task name
+                name_label = ttk.Label(task_frame, text=displayname)
+                name_label.grid(row=0, column=0, sticky="w")
 
-                    row += 1
+                # Progress percentage
+                progress_label = ttk.Label(task_frame, text=f"{progress:.1f}%")
+                progress_label.grid(row=0, column=1, sticky="e")
 
+                # Cancel button
+                cancel_btn = ttk.Button(
+                    task_frame, text="×", width=2,
+                    command=lambda tn=task_name: self._cancel_task(tn)
+                )
+                cancel_btn.grid(row=0, column=2, padx=(5, 0))
+
+                # Progress bar
+                prog_bar = ttk.Progressbar(task_frame, length=200, mode="determinate")
+                prog_bar["value"] = min(progress, 100)
+                prog_bar.grid(row=1, column=0, columnspan=3, sticky="ew")
+
+                self.task_widgets[task_name] = {
+                    "frame": task_frame,
+                    "name_label": name_label,
+                    "progress_label": progress_label,
+                    "progress_bar": prog_bar,
+                    "cancel_btn": cancel_btn,
+                }
+
+            row += 1
+
+        # Show "No active tasks" message if needed
         if row == 0:
-            ttk.Label(self.tasks_inner, text="No active tasks",
-                      foreground="gray").grid(row=0, column=0)
+            if "_no_tasks" not in self.task_widgets:
+                no_tasks_label = ttk.Label(self.tasks_inner, text="No active tasks",
+                                           foreground="gray")
+                no_tasks_label.grid(row=0, column=0)
+                self.task_widgets["_no_tasks"] = {"frame": no_tasks_label}
+        else:
+            if "_no_tasks" in self.task_widgets:
+                self.task_widgets.pop("_no_tasks")["frame"].destroy()
+
+    def _cancel_task(self, task_name: str):
+        """Cancel a running task."""
+        from timeline import Task, TaskInterrupt
+        import bisect
+
+        # Find the task in the timeline events
+        for event in self.gamestate.timeline.events:
+            if isinstance(event, Task) and event.name == task_name:
+                # Check if task is still running at current time
+                state = self.gamestate.timeline.state_at(self.app.current_time)
+                if any(p.name == task_name for p in state.processes):
+                    # Create and add a TaskInterrupt event
+                    interrupt = TaskInterrupt(event, self.app.current_time, is_player_cancel=True)
+                    event.end_event = interrupt
+                    bisect.insort(self.gamestate.timeline.events, interrupt, key=lambda e: e.t)
+                    self.gamestate.timeline.invalidate_after(self.app.current_time)
+                    break
