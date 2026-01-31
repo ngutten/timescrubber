@@ -84,6 +84,12 @@ class Timeline():
     def recompute_bottlenecks(self, ts):
         pass
 
+    # Check if there are any resource bottlenecks between t0 and t1
+    # Returns (time, bottleneck) or (t1, None) if no bottleneck
+    def check_bottlenecks(self, t0, t1):
+        # Stub: no bottleneck system implemented yet
+        return (t1, None)
+
     def recompute(self, t0): # Recompute all events and states from t0 onwards
         cur_time = t0
 
@@ -95,12 +101,15 @@ class Timeline():
             if next_btime < next_time:
                 # Do the bottleneck first
                 cur_time = next_btime
-            else:
+            elif next_event is not None:
                 # Do the event
                 next_event.trigger(next_time, self)
                 cur_time = next_time
                 ts = self.state_at(cur_time)
                 self.recompute_bottlenecks(ts)
+            else:
+                # No more events and no bottlenecks, done
+                break
 
     def state_at(self, t): # Return the last TimeState from just before or equal to t from the state cache
         idx = bisect.bisect_right(self.state_cache, t, key=lambda e: e.time)-1
