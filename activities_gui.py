@@ -7,9 +7,15 @@ start tasks and processes.
 
 import tkinter as tk
 from tkinter import ttk
-from typing import List, Dict, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from gamestate import GameState
+from gamedefs import (
+    get_activity_names,
+    get_activity_description,
+    get_activity_requirements,
+    format_requirements,
+)
 
 if TYPE_CHECKING:
     from app_gui import TimescrubberApp
@@ -55,18 +61,8 @@ class ActivitiesScreen(ttk.Frame):
         activities_scroll.grid(row=0, column=1, sticky="ns")
         self.activities_list.configure(yscrollcommand=activities_scroll.set)
 
-        # Add some placeholder activities
-        placeholder_activities = [
-            "Rest (Recover Stamina)",
-            "Gather Wood",
-            "Gather Stone",
-            "Craft Basic Tools",
-            "Build Shelter",
-            "Explore Area",
-            "Meditate (Gain Insights)",
-            "Study",
-        ]
-        for activity in placeholder_activities:
+        # Add activities from gamedefs
+        for activity in get_activity_names():
             self.activities_list.insert(tk.END, activity)
 
         # Start button
@@ -110,52 +106,15 @@ class ActivitiesScreen(ttk.Frame):
         activity = self.activities_list.get(selection[0])
         self.details_header.configure(text=activity)
 
-        # Update details (placeholder text)
+        # Update details
         self.details_text.configure(state="normal")
         self.details_text.delete("1.0", tk.END)
-        self.details_text.insert("1.0", self._get_activity_description(activity))
+        self.details_text.insert("1.0", get_activity_description(activity))
         self.details_text.configure(state="disabled")
 
         # Update requirements
-        self.requirements_label.configure(
-            text=self._get_activity_requirements(activity)
-        )
-
-    def _get_activity_description(self, activity: str) -> str:
-        """Get placeholder description for an activity."""
-        descriptions = {
-            "Rest (Recover Stamina)": "Take a break and recover your stamina. "
-                "Stamina is essential for performing most activities.",
-            "Gather Wood": "Collect wood from nearby trees. "
-                "Wood is a basic resource used in many crafting recipes.",
-            "Gather Stone": "Search for and collect stone. "
-                "Stone is needed for tools and building structures.",
-            "Craft Basic Tools": "Create simple tools to improve efficiency. "
-                "Tools make gathering and building faster.",
-            "Build Shelter": "Construct a basic shelter for protection. "
-                "Shelters provide bonuses to resting and storage.",
-            "Explore Area": "Scout the surrounding area to discover new locations "
-                "and resources.",
-            "Meditate (Gain Insights)": "Quiet contemplation to gain insights. "
-                "Insights are used for research and upgrades.",
-            "Study": "Study your surroundings and acquired knowledge to unlock "
-                "new abilities and understanding.",
-        }
-        return descriptions.get(activity, "No description available.")
-
-    def _get_activity_requirements(self, activity: str) -> str:
-        """Get placeholder requirements for an activity."""
-        requirements = {
-            "Rest (Recover Stamina)": "None",
-            "Gather Wood": "Stamina: 2",
-            "Gather Stone": "Stamina: 3",
-            "Craft Basic Tools": "Wood: 5, Stone: 2",
-            "Build Shelter": "Wood: 20, Stone: 10",
-            "Explore Area": "Stamina: 5",
-            "Meditate (Gain Insights)": "Stamina: 1",
-            "Study": "Insights: 5",
-        }
-        return requirements.get(activity, "Unknown")
+        reqs = get_activity_requirements(activity)
+        self.requirements_label.configure(text=format_requirements(reqs))
 
     def _start_activity(self):
         """Start the selected activity (placeholder)."""
