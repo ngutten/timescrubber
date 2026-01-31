@@ -153,14 +153,16 @@ class Timeline():
                 return (None, "")
 
     def check_bottlenecks(self, t0: float, t1: float) -> Tuple[float, Optional["Event"]]:
-        """Check if there are any resource bottlenecks between t0 and t1.
+        """Check if there are any resource bottlenecks starting from t0.
 
         Calculates end times dynamically based on current resource states.
-        Returns (time, event) where the event is a ProcessEnd or TaskInterrupt
-        that needs to fire, or (t1, None) if no bottleneck before t1.
+        Returns (time, event) where the event is the earliest ProcessEnd, TaskComplete,
+        or TaskInterrupt that needs to fire, or (t1, None) if no bottleneck found.
+        Note: Events beyond t1/max_time are still returned - they will be added to
+        the events list and processed when max_time increases.
         """
         ts = self.state_at(t0)
-        earliest_time = t1
+        earliest_time = float('inf')
         earliest_event = None
 
         for process in ts.processes:
@@ -187,6 +189,10 @@ class Timeline():
                     earliest_event = ProcessEnd(process, end_time)
                 earliest_event.invalidate = True
 
+        # If no bottleneck found, return t1 as the time
+        if earliest_event is None:
+            earliest_time = t1
+
         return (earliest_time, earliest_event)
 
     def recompute(self, t0): # Recompute all events and states from t0 onwards
@@ -197,19 +203,24 @@ class Timeline():
 
             # Check if there are any bottlenecks between now and then
             next_btime, next_bottleneck = self.check_bottlenecks(cur_time, next_time)
-            if next_btime <= next_time and next_bottleneck is not None:
+            if next_bottleneck is not None:
                 # Add the bottleneck event to the events list so it shows on timeline
                 bisect.insort(self.events, next_bottleneck, key=lambda e: e.t)
-                # Trigger the bottleneck event (process end, task complete, etc.)
-                triggered = next_bottleneck.trigger(next_btime, self)
-                if not triggered:
-                    # Validation failed, remove the event
-                    self.events.remove(next_bottleneck)
+                # Only trigger if the event is within max_time
+                if next_btime <= self.max_time:
+                    # Trigger the bottleneck event (process end, task complete, etc.)
+                    triggered = next_bottleneck.trigger(next_btime, self)
+                    if not triggered:
+                        # Validation failed, remove the event
+                        self.events.remove(next_bottleneck)
+                    else:
+                        cur_time = next_btime
+                        ts = self.state_at(cur_time)
+                        self.recompute_bottlenecks(ts)
+                        continue
                 else:
-                    cur_time = next_btime
-                    ts = self.state_at(cur_time)
-                    self.recompute_bottlenecks(ts)
-                    continue
+                    # Event is beyond max_time, don't trigger yet but it's in the list
+                    break
             if next_event is not None:
                 # Do the event
                 next_event.trigger(next_time, self)
@@ -239,7 +250,8 @@ class Timeline():
             t = event.t
             self.events.remove(event)
             # Clear states at AND after the event time (unlike invalidate_after which keeps states at t)
-            self.state_cache = self.state_cache[:bisect.bisect_left(self.state_cache, t, key=lambda e: e.time)]
+            # Always keep at least the initial state (index 0) to prevent empty cache
+            self.state_cache = self.state_cache[:max(1, bisect.bisect_left(self.state_cache, t, key=lambda e: e.time))]
             # Process remaining events - keep those without invalidate flag
             i = bisect.bisect_right(self.events, t, key=lambda e: e.t)
             head_events = self.events[:i]
