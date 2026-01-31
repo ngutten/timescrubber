@@ -280,6 +280,7 @@ class TimelinePanel(ttk.Frame):
                 spans.append((event.t, end_time or event.t, event))
 
         # Assign vertical offsets to avoid overlaps
+        # Use id(event) as key since multiple tasks can have the same name
         span_offsets = {}
         for start_t, end_t, event in sorted(spans, key=lambda x: x[0]):
             # Find the lowest offset that doesn't overlap with existing spans
@@ -287,9 +288,9 @@ class TimelinePanel(ttk.Frame):
             while True:
                 overlaps = False
                 for other_start, other_end, other_event in spans:
-                    if other_event.name == event.name:
+                    if other_event is event:
                         continue
-                    if other_event.name in span_offsets and span_offsets[other_event.name] == offset:
+                    if id(other_event) in span_offsets and span_offsets[id(other_event)] == offset:
                         # Check if time ranges overlap
                         if not (end_t <= other_start or start_t >= other_end):
                             overlaps = True
@@ -297,15 +298,15 @@ class TimelinePanel(ttk.Frame):
                 if not overlaps:
                     break
                 offset += 1
-            span_offsets[event.name] = offset
+            span_offsets[id(event)] = offset
 
         # First pass: draw process/task spans (bars connecting start to end)
-        drawn_spans = set()  # Track which processes we've drawn spans for
+        drawn_spans = set()  # Track which event instances we've drawn spans for
         for event in events:
             if isinstance(event, (Process, Task)) and not isinstance(event, (ProcessEnd, TaskComplete, TaskInterrupt)):
-                if event.name in drawn_spans:
+                if id(event) in drawn_spans:
                     continue
-                drawn_spans.add(event.name)
+                drawn_spans.add(id(event))
 
                 # Find the end event for this process/task
                 end_time = None
@@ -327,7 +328,7 @@ class TimelinePanel(ttk.Frame):
                     draw_end_x = min(self.canvas.winfo_width() - self.PADDING, end_x)
 
                 # Calculate Y position based on offset
-                offset = span_offsets.get(event.name, 0)
+                offset = span_offsets.get(id(event), 0)
                 process_y = base_process_y - (offset * self.BAR_SPACING)
 
                 # Determine colors based on type and hover state
@@ -338,8 +339,14 @@ class TimelinePanel(ttk.Frame):
                     bar_color = "#90CAF9"  # Light blue for process span
                     outline_color = "#2196F3"  # Blue
 
-                # Highlight if hovered
-                if self.hovered_event and self.hovered_event.name == event.name:
+                # Highlight if hovered (compare instances, not names)
+                # Also highlight if hovering over this task/process's end event
+                is_hovered = self.hovered_event is event
+                if not is_hovered and self.hovered_event:
+                    # Check if hovering over the end event of this task/process
+                    hovered_parent = getattr(self.hovered_event, 'task', None) or getattr(self.hovered_event, 'process', None)
+                    is_hovered = hovered_parent is event
+                if is_hovered:
                     bar_color = "#FFEB3B"  # Yellow highlight
                     outline_color = "#FFC107"
 
@@ -368,13 +375,14 @@ class TimelinePanel(ttk.Frame):
             x = self._time_to_x(event.t)
 
             # Adjust marker Y based on span offset if applicable
+            # For start events, use id(event); for end events, use id of parent task/process
             marker_y = event_y
-            if hasattr(event, 'name') and event.name in span_offsets:
-                marker_y = event_y - (span_offsets[event.name] * self.BAR_SPACING)
-            elif hasattr(event, 'task') and event.task.name in span_offsets:
-                marker_y = event_y - (span_offsets[event.task.name] * self.BAR_SPACING)
-            elif hasattr(event, 'process') and event.process.name in span_offsets:
-                marker_y = event_y - (span_offsets[event.process.name] * self.BAR_SPACING)
+            if id(event) in span_offsets:
+                marker_y = event_y - (span_offsets[id(event)] * self.BAR_SPACING)
+            elif hasattr(event, 'task') and id(event.task) in span_offsets:
+                marker_y = event_y - (span_offsets[id(event.task)] * self.BAR_SPACING)
+            elif hasattr(event, 'process') and id(event.process) in span_offsets:
+                marker_y = event_y - (span_offsets[id(event.process)] * self.BAR_SPACING)
 
             # Determine color and shape based on event type
             if isinstance(event, TaskComplete):
@@ -426,12 +434,12 @@ class TimelinePanel(ttk.Frame):
 
             # Calculate baseline connector Y based on offset
             offset = 0
-            if hasattr(event, 'name') and event.name in span_offsets:
-                offset = span_offsets[event.name]
-            elif hasattr(event, 'task') and event.task.name in span_offsets:
-                offset = span_offsets[event.task.name]
-            elif hasattr(event, 'process') and event.process.name in span_offsets:
-                offset = span_offsets[event.process.name]
+            if id(event) in span_offsets:
+                offset = span_offsets[id(event)]
+            elif hasattr(event, 'task') and id(event.task) in span_offsets:
+                offset = span_offsets[id(event.task)]
+            elif hasattr(event, 'process') and id(event.process) in span_offsets:
+                offset = span_offsets[id(event.process)]
             connector_baseline = baseline_y - (offset * self.BAR_SPACING)
 
             # Draw connector to baseline
