@@ -221,6 +221,7 @@ class Event():
 
     def __init__(self, name, displayname = None):
         self.name = name
+        self.displayname = displayname if displayname else name
 
     def validate(self, timestate: TimeState, t: float): # Check if this event would be valid to fire at this time and timestate
         return True
