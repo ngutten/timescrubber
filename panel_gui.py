@@ -314,18 +314,23 @@ class ResourcePanel(ttk.Frame):
         from timeline import Task, TaskInterrupt
         import bisect
 
-        # Find the task in the timeline events
+        current_time = self.app.current_time
+
+        # Find the task instance that is currently running at current_time
+        # A task is running if: started <= current_time and (no end_event or end_event.t > current_time)
         for event in self.gamestate.timeline.events:
             if isinstance(event, Task) and event.name == task_name:
-                # Check if task is still running at current time
-                state = self.gamestate.timeline.state_at(self.app.current_time)
-                if any(p.name == task_name for p in state.processes):
-                    # Remove the old end event from timeline if it exists
-                    if event.end_event and event.end_event in self.gamestate.timeline.events:
-                        self.gamestate.timeline.events.remove(event.end_event)
-                    # Create and add a TaskInterrupt event
-                    interrupt = TaskInterrupt(event, self.app.current_time, is_player_cancel=True)
-                    event.end_event = interrupt
-                    bisect.insort(self.gamestate.timeline.events, interrupt, key=lambda e: e.t)
-                    self.gamestate.timeline.invalidate_after(self.app.current_time)
-                    break
+                # Check if this task instance is the one running at current_time
+                if event.t <= current_time:
+                    end_time = event.end_event.t if event.end_event else float('inf')
+                    if end_time > current_time:
+                        # This is the currently running task instance
+                        # Remove the old end event from timeline if it exists
+                        if event.end_event and event.end_event in self.gamestate.timeline.events:
+                            self.gamestate.timeline.events.remove(event.end_event)
+                        # Create and add a TaskInterrupt event
+                        interrupt = TaskInterrupt(event, current_time, is_player_cancel=True)
+                        event.end_event = interrupt
+                        bisect.insort(self.gamestate.timeline.events, interrupt, key=lambda e: e.t)
+                        self.gamestate.timeline.invalidate_after(current_time)
+                        break
