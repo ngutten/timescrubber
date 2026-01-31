@@ -239,8 +239,8 @@ class ResourcePanel(ttk.Frame):
                     progress = var.get(current_time)
                     active_tasks[task_name] = progress
 
-        # Remove widgets for tasks that are no longer active
-        tasks_to_remove = [name for name in self.task_widgets if name not in active_tasks]
+        # Remove widgets for tasks that are no longer active (but keep _no_tasks placeholder)
+        tasks_to_remove = [name for name in self.task_widgets if name not in active_tasks and name != "_no_tasks"]
         for name in tasks_to_remove:
             widgets = self.task_widgets.pop(name)
             widgets["frame"].destroy()
@@ -320,6 +320,9 @@ class ResourcePanel(ttk.Frame):
                 # Check if task is still running at current time
                 state = self.gamestate.timeline.state_at(self.app.current_time)
                 if any(p.name == task_name for p in state.processes):
+                    # Remove the old end event from timeline if it exists
+                    if event.end_event and event.end_event in self.gamestate.timeline.events:
+                        self.gamestate.timeline.events.remove(event.end_event)
                     # Create and add a TaskInterrupt event
                     interrupt = TaskInterrupt(event, self.app.current_time, is_player_cancel=True)
                     event.end_event = interrupt
