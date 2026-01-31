@@ -1,9 +1,10 @@
 class Registry():
-    vars: dict = {}
+    vars: dict = None
     time: float = 0.0
 
     def __init__(self, t):
         self.time = t
+        self.vars = {}
     
     def add_variable(self, var):
         self.vars[var.name] = var
