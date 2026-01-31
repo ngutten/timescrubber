@@ -18,6 +18,7 @@ from tkinter import ttk
 from typing import Dict, TYPE_CHECKING
 
 from gamestate import GameState
+from gamedefs import SCREENS, SETTINGS, GAME_INFO, get_screen_by_key
 
 if TYPE_CHECKING:
     from app_gui import TimescrubberApp
@@ -43,67 +44,31 @@ class TabbedMenu(ttk.Frame):
         self.notebook = ttk.Notebook(self)
         self.notebook.grid(row=0, column=0, sticky="nsew")
 
-        # Import and create screens
+        # Import screens with custom implementations
         from activities_gui import ActivitiesScreen
 
-        # Activities tab (implemented)
-        self.activities = ActivitiesScreen(self.notebook, self.gamestate, self.app)
-        self.notebook.add(self.activities, text="Activities")
-        self.screens["activities"] = self.activities
+        # Create tabs from SCREENS definitions
+        for screen_def in SCREENS:
+            key = screen_def["key"]
+            tab_text = screen_def["tab_text"]
+            title = screen_def["title"]
+            description = screen_def["description"]
 
-        # Upgrades tab (placeholder)
-        self.upgrades = self._create_placeholder("Upgrades",
-            "Upgrade your abilities and tools to become more efficient.\n\n"
-            "Upgrades are permanent improvements that persist across runs.")
-        self.notebook.add(self.upgrades, text="Upgrades")
-        self.screens["upgrades"] = self.upgrades
+            if key == "activities":
+                # Activities has custom implementation
+                frame = ActivitiesScreen(self.notebook, self.gamestate, self.app)
+                self.activities = frame
+            elif key == "config":
+                # Config has custom implementation
+                frame = self._create_config_placeholder()
+                self.config = frame
+            else:
+                # Use placeholder for other screens
+                frame = self._create_placeholder(title, description)
+                setattr(self, key, frame)
 
-        # Nexus Upgrades tab (placeholder)
-        self.nexus = self._create_placeholder("Nexus Upgrades",
-            "Meta-progression upgrades that affect all timelines.\n\n"
-            "Nexus upgrades are earned through special achievements and milestones.")
-        self.notebook.add(self.nexus, text="Nexus")
-        self.screens["nexus"] = self.nexus
-
-        # Research tab (placeholder)
-        self.research = self._create_placeholder("Research",
-            "Unlock new technologies and abilities through research.\n\n"
-            "Research requires Insights and time to complete.")
-        self.notebook.add(self.research, text="Research")
-        self.screens["research"] = self.research
-
-        # World Map tab (placeholder)
-        self.world_map = self._create_placeholder("World Map",
-            "Explore the world and discover new locations.\n\n"
-            "Each location offers unique resources and challenges.")
-        self.notebook.add(self.world_map, text="Map")
-        self.screens["map"] = self.world_map
-
-        # Site Development tab (placeholder)
-        self.site = self._create_placeholder("Site Development",
-            "Develop your current location with buildings and improvements.\n\n"
-            "Buildings provide bonuses and unlock new activities.")
-        self.notebook.add(self.site, text="Site")
-        self.screens["site"] = self.site
-
-        # Events tab (placeholder)
-        self.events = self._create_placeholder("Events Log",
-            "View the history of events that have occurred on the timeline.\n\n"
-            "Events can be reviewed and some can be modified or undone.")
-        self.notebook.add(self.events, text="Events")
-        self.screens["events"] = self.events
-
-        # Achievements tab (placeholder)
-        self.achievements = self._create_placeholder("Achievements",
-            "Track your accomplishments and unlock rewards.\n\n"
-            "Achievements provide bonuses and unlock new content.")
-        self.notebook.add(self.achievements, text="Achievements")
-        self.screens["achievements"] = self.achievements
-
-        # Configuration tab (placeholder)
-        self.config = self._create_config_placeholder()
-        self.notebook.add(self.config, text="Settings")
-        self.screens["config"] = self.config
+            self.notebook.add(frame, text=tab_text)
+            self.screens[key] = frame
 
     def _create_placeholder(self, title: str, description: str) -> ttk.Frame:
         """Create a placeholder screen with a title and description."""
@@ -147,14 +112,16 @@ class TabbedMenu(ttk.Frame):
         game_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
 
         # Auto-save toggle
-        self.autosave_var = tk.BooleanVar(value=True)
-        autosave_check = ttk.Checkbutton(game_frame, text="Auto-save enabled",
+        autosave_def = SETTINGS["autosave"]
+        self.autosave_var = tk.BooleanVar(value=autosave_def["default"])
+        autosave_check = ttk.Checkbutton(game_frame, text=autosave_def["label"],
                                          variable=self.autosave_var)
         autosave_check.grid(row=0, column=0, sticky="w")
 
         # Notifications toggle
-        self.notifications_var = tk.BooleanVar(value=True)
-        notifications_check = ttk.Checkbutton(game_frame, text="Show notifications",
+        notif_def = SETTINGS["notifications"]
+        self.notifications_var = tk.BooleanVar(value=notif_def["default"])
+        notifications_check = ttk.Checkbutton(game_frame, text=notif_def["label"],
                                               variable=self.notifications_var)
         notifications_check.grid(row=1, column=0, sticky="w")
 
@@ -162,19 +129,21 @@ class TabbedMenu(ttk.Frame):
         display_frame = ttk.LabelFrame(frame, text="Display Settings", padding=10)
         display_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
 
-        # Theme selection (placeholder)
-        ttk.Label(display_frame, text="Theme:").grid(row=0, column=0, sticky="w")
-        self.theme_var = tk.StringVar(value="Default")
+        # Theme selection
+        theme_def = SETTINGS["theme"]
+        ttk.Label(display_frame, text=f"{theme_def['label']}:").grid(row=0, column=0, sticky="w")
+        self.theme_var = tk.StringVar(value=theme_def["default"])
         theme_combo = ttk.Combobox(display_frame, textvariable=self.theme_var,
-                                   values=["Default", "Dark", "Light"],
+                                   values=theme_def["options"],
                                    state="readonly", width=15)
         theme_combo.grid(row=0, column=1, sticky="w", padx=(10, 0))
 
         # Number format
-        ttk.Label(display_frame, text="Number format:").grid(row=1, column=0, sticky="w")
-        self.number_format_var = tk.StringVar(value="Standard")
+        format_def = SETTINGS["number_format"]
+        ttk.Label(display_frame, text=f"{format_def['label']}:").grid(row=1, column=0, sticky="w")
+        self.number_format_var = tk.StringVar(value=format_def["default"])
         format_combo = ttk.Combobox(display_frame, textvariable=self.number_format_var,
-                                    values=["Standard", "Scientific", "Engineering"],
+                                    values=format_def["options"],
                                     state="readonly", width=15)
         format_combo.grid(row=1, column=1, sticky="w", padx=(10, 0))
 
@@ -183,10 +152,9 @@ class TabbedMenu(ttk.Frame):
         about_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
 
         about_text = (
-            "Timescrubber - A Non-Linear Time Idle Game\n"
-            "Version: 0.1.0 (Development)\n\n"
-            "A timeline-based idle game where you can manipulate time "
-            "and observe how changes cascade through history."
+            f"{GAME_INFO['name']} - {GAME_INFO['subtitle']}\n"
+            f"Version: {GAME_INFO['version']}\n\n"
+            f"{GAME_INFO['description']}"
         )
         ttk.Label(about_frame, text=about_text, wraplength=400,
                   justify="left").grid(row=0, column=0, sticky="w")
