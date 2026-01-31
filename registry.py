@@ -10,3 +10,9 @@ class Registry():
 
     def get_variable(self, name):
         return self.vars[name]
+
+    def keys(self):
+        return self.vars.keys()
+
+    def __getitem__(self, name):
+        return self.vars[name]
