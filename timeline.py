@@ -106,7 +106,10 @@ class Timeline():
         idx = bisect.bisect_right(self.state_cache, t, key=lambda e: e.time)-1
         return self.state_cache[idx]
 
-    # Note - this will call add_timestate to add a timestate to the cache        
+    def add_timestate(self, timestate: TimeState):
+        bisect.insort(self.state_cache, timestate, key=lambda e: e.time)
+
+    # Note - this will call add_timestate to add a timestate to the cache
     def add_event(self, event):
         bisect.insort(self.events, event, key=lambda e: e.time)
         event.trigger(event.time, self)
