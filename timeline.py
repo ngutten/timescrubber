@@ -4,6 +4,7 @@ import bisect
 
 from variable import Variable, LinearVariable
 from registry import Registry
+from modifiers import get_modifier_registry, apply_rate_modifier, apply_consumed_modifier, apply_produced_modifier
 
 import const
 
@@ -308,18 +309,38 @@ class Process(Event):
 
     When started, modifies the rates of consumed and produced LinearVariables.
     Automatically creates a ProcessEnd event when consumed resources are depleted.
+
+    Attributes:
+        consumed: List of (variable_name, rate) pairs for resources consumed
+        produced: List of (variable_name, rate) pairs for resources produced
+        throttle: Efficiency fraction (0-1)
+        tags: Category tags for modifier targeting (e.g., ["gathering", "wood"])
+        base_consumed: Original consumed values before modifiers
+        base_produced: Original produced values before modifiers
     """
     consumed: List[Tuple[str, float]] = None  # List of (variable_name, rate) pairs
     produced: List[Tuple[str, float]] = None  # List of (variable_name, rate) pairs
     throttle: float = 1.0  # What fraction of the maximum rate does this process operate at?
     end_event: Optional["ProcessEnd"] = None  # Reference to the end event
+    tags: List[str] = None  # Category tags for modifier targeting
 
-    def __init__(self, name, displayname=None, consumed=None, produced=None):
+    def __init__(self, name, displayname=None, consumed=None, produced=None, tags=None):
         super().__init__(name, displayname)
-        self.consumed = consumed or []
-        self.produced = produced or []
+        self.base_consumed = consumed or []  # Store original values
+        self.base_produced = produced or []
+        self.consumed = list(self.base_consumed)  # Working copy (may be modified)
+        self.produced = list(self.base_produced)
+        self.tags = tags or []
         self.end_event = None
         self.invalidate = True  # Processes can be invalidated if prerequisites change
+
+    def get_modified_consumed(self) -> List[Tuple[str, float]]:
+        """Get consumed rates with modifiers applied."""
+        return apply_consumed_modifier(self.base_consumed, self.tags)
+
+    def get_modified_produced(self) -> List[Tuple[str, float]]:
+        """Get produced rates with modifiers applied."""
+        return apply_produced_modifier(self.base_produced, self.tags)
 
     def validate(self, timestate: TimeState, t: float) -> bool:
         """Check if process can start - ensure uniqueness and resource availability."""
@@ -342,14 +363,22 @@ class Process(Event):
 
     def on_start_vars(self, timestate: TimeState):
         """Modify variable rates when process starts."""
+        # Apply modifiers to get effective rates
+        effective_consumed = self.get_modified_consumed()
+        effective_produced = self.get_modified_produced()
+
+        # Store effective values for use in ProcessEnd
+        self.consumed = effective_consumed
+        self.produced = effective_produced
+
         # Decrease rates for consumed resources
-        for var_name, rate in self.consumed:
+        for var_name, rate in effective_consumed:
             var = timestate.get_variable(var_name)
             if var and isinstance(var, LinearVariable):
                 var.rate -= rate * self.throttle
 
         # Increase rates for produced resources
-        for var_name, rate in self.produced:
+        for var_name, rate in effective_produced:
             var = timestate.get_variable(var_name)
             if var and isinstance(var, LinearVariable):
                 var.rate += rate * self.throttle
@@ -434,14 +463,26 @@ class Task(Process):
 
     Tasks have a fixed duration based on their progress rate. When progress
     reaches 100, the task completes and triggers on_finish_vars/on_finish_effects.
+
+    The rate is affected by modifiers based on the task's tags.
+
+    Attributes:
+        base_rate: Original rate before modifiers
+        rate: Effective rate (may be modified)
     """
     progress_var: LinearVariable = None
     rate: float = 0.0  # Progress rate (progress units per time unit, 100 = complete)
+    base_rate: float = 0.0  # Original rate before modifiers
 
-    def __init__(self, name, rate, displayname=None, consumed=None, produced=None):
-        super().__init__(name, displayname, consumed, produced)
-        self.rate = rate
+    def __init__(self, name, rate, displayname=None, consumed=None, produced=None, tags=None):
+        super().__init__(name, displayname, consumed, produced, tags)
+        self.base_rate = rate
+        self.rate = rate  # Will be modified when triggered
         self.progress_var = None
+
+    def get_modified_rate(self) -> float:
+        """Get the task rate with modifiers applied."""
+        return apply_rate_modifier(self.base_rate, self.tags)
 
     def validate(self, timestate: TimeState, t: float) -> bool:
         """Check if task can start - also check that task isn't already running."""
@@ -454,6 +495,9 @@ class Task(Process):
     def on_start_vars(self, timestate: TimeState):
         """Create progress variable and apply process rate changes."""
         super().on_start_vars(timestate)
+
+        # Apply rate modifier
+        self.rate = self.get_modified_rate()
 
         # Create the progress variable
         self.progress_var = LinearVariable(
@@ -553,6 +597,13 @@ class TaskComplete(Event):
 
     def on_start_effects(self, timeline: Timeline):
         """Apply task-specific follow-up effects."""
+        # Notify upgrade registry of task completion (for prerequisites)
+        try:
+            from upgrades import get_upgrade_registry
+            get_upgrade_registry().mark_task_completed(self.task.name)
+        except ImportError:
+            pass  # Upgrade system not available
+
         self.task.on_finish_effects(timeline)
 
 

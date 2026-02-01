@@ -25,7 +25,9 @@ timescrubber/
 ├── timeline.py          # Core timeline engine (main logic)
 ├── variable.py          # Variable and LinearVariable classes
 ├── registry.py          # Variable storage container
-├── gamedefs.py          # Game content definitions (placeholder)
+├── gamedefs.py          # Game content definitions (activities, upgrades)
+├── upgrades.py          # Upgrade system (regular, research, nexus)
+├── modifiers.py         # Modifier stack system for bonuses
 └── *_gui.py             # GUI components (11 files, all stubs)
 ```
 
@@ -62,6 +64,38 @@ The heart of the game engine. Key classes:
 - **`Task(Process)`** - Time-limited completion events
   - Creates a `{taskname}_progress` LinearVariable on trigger
   - `on_finish_vars()` / `on_finish_effects()` - Completion handlers
+  - `tags` - Category tags for modifier targeting (e.g., `["gathering", "wood"]`)
+  - `get_modified_rate()` - Returns rate with modifiers applied
+
+#### Modifier System (`modifiers.py`)
+Stackable bonuses that modify game values:
+
+- **`Modifier`** - Single modifier with source, type, value, target
+  - `modifier_type` - Type string for stacking (same type = additive, different = multiplicative)
+  - `target_param` - Parameter to modify (`rate`, `consumed`, `produced`)
+  - `target_tags` - Tags that must match (empty = applies to all)
+
+- **`ModifierStack`** - Collection of modifiers
+  - `calculate_multiplier(param, tags)` - Gets combined multiplier
+
+- **`ModifierRegistry`** - Global singleton for all active modifiers
+  - `get_multiplier(param, tags)` - Query final multiplier
+
+#### Upgrade System (`upgrades.py`)
+Three types of upgrades with prerequisites, costs, and effects:
+
+- **`UpgradeType`** - Enum: `REGULAR`, `RESEARCH`, `NEXUS`
+- **`UpgradeDefinition`** - Complete upgrade specification
+  - `prerequisites` - List of requirements (other upgrades, research, etc.)
+  - `costs` - Resources to spend
+  - `effects` - What happens when purchased (modifiers, unlocks, etc.)
+  - `render_position` - (x, y) for research tree layout
+
+- **`UpgradeRegistry`** - Manages all upgrades
+  - `can_purchase(name, timestate, t)` - Check if purchasable
+  - `purchase(name, timestate, t)` - Buy upgrade, apply effects
+  - `is_visible(name)` - Check if should show in UI
+  - `get_max_parallel_tasks()` - Nexus upgrade value
 
 #### Variable System (`variable.py`)
 
@@ -143,12 +177,16 @@ from timeline import TimeState, Timeline, Event
 - Linear variables with rates and bounds
 - Event hierarchy (Event → Process → Task)
 - Registry pattern for variables
+- **Modifier system** - Stackable bonuses with type-based combining
+- **Upgrade system** - Three upgrade types (Regular, Research, Nexus)
+- **Prerequisites system** - Upgrades/research unlock based on requirements
+- **Task/Activity tagging** - Category tags for targeted modifiers
+- **Activity definitions** - 10 activities with tags and unlock requirements
+- **Upgrade definitions** - 24 upgrades across all three categories
 
 ### Not Yet Implemented
 - GUI (no framework chosen yet)
-- Game content (`gamedefs.py` is placeholder)
 - Bottleneck/throttling system (methods stubbed)
-- Task completion mechanics (partially wired)
 - Save/load persistence
 - Player input and game loop
 - Testing framework
@@ -192,13 +230,35 @@ from timeline import TimeState, Timeline, Event
 2. Never modify state_cache directly
 3. Query state via `timeline.state_at(t)`
 
+### When Adding Upgrades
+1. Define in `gamedefs.py` using `make_upgrade()` helper
+2. Add to appropriate list: `REGULAR_UPGRADES`, `RESEARCH_UPGRADES`, or `NEXUS_UPGRADES`
+3. Use helper functions for effects: `make_rate_modifier_effect()`, `make_unlock_task_effect()`, etc.
+4. For research tree, set `render_position` as (x, y) coordinates
+
+### When Adding Modifiers
+1. Modifiers with the SAME `modifier_type` are **additive** (e.g., two +20% = +40%)
+2. Modifiers with DIFFERENT `modifier_type` are **multiplicative** (e.g., +20% * +20% = +44%)
+3. Use `target_tags` to limit which Tasks/Processes are affected
+4. Empty `target_tags` applies to all
+
+### When Adding Activities
+1. Add to `ACTIVITIES` list in `gamedefs.py`
+2. Set `tags` for modifier targeting (e.g., `["gathering", "wood"]`)
+3. Set `unlocked` to `False` if requires research to access
+4. Use `is_activity_unlocked()` to check visibility
+
 ## Testing
 
-No testing framework is currently set up. Manual testing via `main.py`:
+Manual testing via CLI mode:
 
 ```bash
-python3 main.py
-# Outputs: state_cache contents and Stamina value at t=2
+# Run CLI demo mode (shows upgrade system, modifiers, research tree)
+python3 main.py --cli
+
+# Run existing test files
+python3 test_timeline_events.py
+python3 test_process_task.py
 ```
 
 ## Future Development Priorities
