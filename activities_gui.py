@@ -18,6 +18,7 @@ from gamedefs import (
     format_requirements,
     format_consumed_produced,
     make_activity_task,
+    get_unlocked_activities,
 )
 from variable import LinearVariable
 
@@ -56,7 +57,7 @@ class ActivitiesScreen(ttk.Frame):
         available_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         available_frame.grid_columnconfigure(0, weight=1)
 
-        # Placeholder activities list
+        # Activities list (populated by update_display based on current time)
         self.activities_list = tk.Listbox(available_frame, height=15)
         self.activities_list.grid(row=0, column=0, sticky="nsew")
 
@@ -65,9 +66,8 @@ class ActivitiesScreen(ttk.Frame):
         activities_scroll.grid(row=0, column=1, sticky="ns")
         self.activities_list.configure(yscrollcommand=activities_scroll.set)
 
-        # Add activities from gamedefs
-        for activity in get_activity_names():
-            self.activities_list.insert(tk.END, activity)
+        # Track currently displayed activities for efficient updates
+        self._displayed_activities = []
 
         # Start button
         start_btn = ttk.Button(available_frame, text="Start Activity",
@@ -149,9 +149,10 @@ class ActivitiesScreen(ttk.Frame):
             print(f"Cannot start {activity_name}: requirements not met")
             return
 
-        # Create the task at the current time
+        # Create the task at the current time (pass timestate for unlock check)
         current_time = self.app.current_time
-        task = make_activity_task(activity_name, current_time)
+        ts = self.gamestate.timeline.state_at(current_time)
+        task = make_activity_task(activity_name, current_time, ts)
 
         if task:
             # Add the task to the timeline
@@ -191,8 +192,33 @@ class ActivitiesScreen(ttk.Frame):
         return True
 
     def update_display(self, current_time: float):
-        """Update the activities display to show availability."""
-        # Update each activity's availability status
+        """Update the activities display based on what's unlocked at current time."""
+        ts = self.gamestate.timeline.state_at(current_time)
+
+        # Get currently unlocked activities (time-aware)
+        unlocked = get_unlocked_activities(ts)
+        unlocked_names = [a["displayname"] for a in unlocked]
+
+        # Only refresh list if the set of unlocked activities changed
+        if unlocked_names != self._displayed_activities:
+            # Remember current selection
+            selection = self.activities_list.curselection()
+            selected_name = None
+            if selection:
+                selected_name = self.activities_list.get(selection[0])
+
+            # Rebuild the list
+            self.activities_list.delete(0, tk.END)
+            for name in unlocked_names:
+                self.activities_list.insert(tk.END, name)
+            self._displayed_activities = unlocked_names
+
+            # Restore selection if the activity is still in the list
+            if selected_name and selected_name in unlocked_names:
+                idx = unlocked_names.index(selected_name)
+                self.activities_list.selection_set(idx)
+
+        # Update each activity's availability status (can start vs locked)
         for i in range(self.activities_list.size()):
             activity_name = self.activities_list.get(i)
             if self._can_start_activity(activity_name):
