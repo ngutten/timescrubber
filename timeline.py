@@ -23,10 +23,58 @@ class TimeState():
 
     def get_variable(self, name):
         return self.registry.get_variable(name)
-    
-    # Return a hard copy of the timestate, propagated forward to time t (for rehoming linearvariables)    
-    def copy(self, t): 
-        new_state = deepcopy(self)        
+
+    def is_upgrade_purchased(self, name: str) -> bool:
+        """Check if an upgrade has been purchased at or before this timestate.
+
+        Uses a Variable named 'upgrade_<name>' to track purchase state.
+        """
+        var = self.get_variable(f"upgrade_{name}")
+        return var is not None and var.get(self.time) >= 1
+
+    def is_task_unlocked(self, task_name: str) -> bool:
+        """Check if a task has been unlocked at or before this timestate.
+
+        Uses a Variable named 'task_unlocked_<name>' to track unlock state.
+        """
+        var = self.get_variable(f"task_unlocked_{task_name}")
+        return var is not None and var.get(self.time) >= 1
+
+    def is_resource_unlocked(self, resource_name: str) -> bool:
+        """Check if a resource has been unlocked at or before this timestate.
+
+        Uses a Variable named 'resource_unlocked_<name>' to track unlock state.
+        """
+        var = self.get_variable(f"resource_unlocked_{resource_name}")
+        return var is not None and var.get(self.time) >= 1
+
+    def add_purchased_upgrade(self, name: str):
+        """Record that an upgrade was purchased at this time.
+
+        Creates a Variable named 'upgrade_<name>' with value 1.
+        """
+        var = Variable(f"upgrade_{name}", value=1, tags=["upgrade", "purchased"])
+        self.add_variable(var)
+
+    def add_unlocked_task(self, task_name: str):
+        """Record that a task was unlocked at this time.
+
+        Creates a Variable named 'task_unlocked_<name>' with value 1.
+        """
+        var = Variable(f"task_unlocked_{task_name}", value=1, tags=["task", "unlocked"])
+        self.add_variable(var)
+
+    def add_unlocked_resource(self, resource_name: str):
+        """Record that a resource was unlocked at this time.
+
+        Creates a Variable named 'resource_unlocked_<name>' with value 1.
+        """
+        var = Variable(f"resource_unlocked_{resource_name}", value=1, tags=["resource", "unlocked"])
+        self.add_variable(var)
+
+    # Return a hard copy of the timestate, propagated forward to time t (for rehoming linearvariables)
+    def copy(self, t):
+        new_state = deepcopy(self)
         new_state.time = t
         new_state.registry.time = t
 
