@@ -46,6 +46,8 @@ class TabbedMenu(ttk.Frame):
 
         # Import screens with custom implementations
         from activities_gui import ActivitiesScreen
+        from upgrades_gui import UpgradesScreen, NexusScreen
+        from research_gui import ResearchScreen
 
         # Create tabs from SCREENS definitions
         for screen_def in SCREENS:
@@ -58,6 +60,18 @@ class TabbedMenu(ttk.Frame):
                 # Activities has custom implementation
                 frame = ActivitiesScreen(self.notebook, self.gamestate, self.app)
                 self.activities = frame
+            elif key == "upgrades":
+                # Upgrades screen
+                frame = UpgradesScreen(self.notebook, self.gamestate, self.app)
+                self.upgrades = frame
+            elif key == "nexus":
+                # Nexus meta-progression screen
+                frame = NexusScreen(self.notebook, self.gamestate, self.app)
+                self.nexus = frame
+            elif key == "research":
+                # Research tree screen
+                frame = ResearchScreen(self.notebook, self.gamestate, self.app)
+                self.research = frame
             elif key == "config":
                 # Config has custom implementation
                 frame = self._create_config_placeholder()
@@ -175,7 +189,12 @@ class TabbedMenu(ttk.Frame):
         # Update the appropriate screen
         if tab_name == "Activities":
             self.activities.update_display(current_time)
-        # Other screens would update here when implemented
+        elif tab_name == "Upgrades":
+            self.upgrades.update_display(current_time)
+        elif tab_name == "Nexus":
+            self.nexus.update_display(current_time)
+        elif tab_name == "Research":
+            self.research.update_display(current_time)
 
     def select_tab(self, tab_name: str):
         """Programmatically select a tab by name."""
