@@ -1,32 +1,78 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
+
 
 class Variable():
+    """A basic named variable with a value and optional tags.
+
+    Attributes:
+        name: Internal unique identifier
+        displayname: Human-readable name for UI
+        value: Current value
+        tags: List of tags for categorization (e.g., ["resource", "basic"])
+        unlocked: Whether this variable is visible to the player
+    """
     value: float = 0.0
     name: str = ""
     displayname: str = ""
     tags: List[str] = None
+    unlocked: bool = True  # Whether visible in UI (for unlock system)
 
-    def __init__(self, name, value=0, displayname=None):
+    def __init__(self, name: str, value: float = 0, displayname: Optional[str] = None,
+                 tags: Optional[List[str]] = None, unlocked: bool = True):
         self.name = name
         self.value = value
-        self.tags = []
+        self.tags = tags if tags is not None else []
+        self.unlocked = unlocked
         if displayname:
             self.displayname = displayname
+        else:
+            self.displayname = name
 
-    def get(self, t):
+    def get(self, t: float) -> float:
         return self.value
-    
-    def set(self, x, t):
+
+    def set(self, x: float, t: float):
         self.value = x
 
+    def has_tag(self, tag: str) -> bool:
+        """Check if this variable has a specific tag."""
+        return tag in self.tags
+
+    def has_any_tag(self, tags: List[str]) -> bool:
+        """Check if this variable has any of the specified tags."""
+        return any(tag in self.tags for tag in tags)
+
+    def add_tag(self, tag: str):
+        """Add a tag to this variable."""
+        if tag not in self.tags:
+            self.tags.append(tag)
+
+    def remove_tag(self, tag: str):
+        """Remove a tag from this variable."""
+        if tag in self.tags:
+            self.tags.remove(tag)
+
 class LinearVariable(Variable):
+    """A variable that changes linearly over time.
+
+    The value at any time t is calculated as:
+        clamp((t - t0) * rate + value, min, max)
+
+    Attributes:
+        t0: Reference time for the linear calculation
+        rate: Change per time unit (can be negative)
+        min: Minimum value (clamped)
+        max: Maximum value (clamped)
+    """
     t0: float = 0.0
     rate: float = 0.0
     min: float = 0.0
     max: float = 10000
 
-    def __init__(self, name, value=0, displayname=None, min=0, max=10000, rate=0):
-        super().__init__(name, value, displayname)
+    def __init__(self, name: str, value: float = 0, displayname: Optional[str] = None,
+                 min: float = 0, max: float = 10000, rate: float = 0,
+                 tags: Optional[List[str]] = None, unlocked: bool = True):
+        super().__init__(name, value, displayname, tags, unlocked)
 
         self.min = min
         self.max = max
