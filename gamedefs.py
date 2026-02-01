@@ -257,11 +257,14 @@ def format_consumed_produced(activity: Dict[str, Any]) -> str:
     return "\n".join(parts) if parts else "No resource effects"
 
 
-def is_activity_unlocked(name: str) -> bool:
+def is_activity_unlocked(name: str, timestate=None) -> bool:
     """Check if an activity is unlocked and available to the player.
 
     Args:
         name: The internal name of the activity
+        timestate: Optional TimeState for time-aware unlock checking.
+                   If provided, checks if activity was unlocked at or before this time.
+                   If None, uses the global upgrade registry (not time-aware).
 
     Returns:
         True if the activity is visible/available
@@ -275,21 +278,31 @@ def is_activity_unlocked(name: str) -> bool:
         return True
 
     # Check if unlocked by upgrade system
-    upgrade_registry = get_upgrade_registry()
-    return upgrade_registry.is_task_unlocked(name)
+    if timestate is not None:
+        # Use time-aware check via timestate
+        return timestate.is_task_unlocked(name)
+    else:
+        # Fall back to global registry (not time-aware)
+        upgrade_registry = get_upgrade_registry()
+        return upgrade_registry.is_task_unlocked(name)
 
 
-def get_unlocked_activities() -> List[Dict[str, Any]]:
-    """Get all activities that are currently unlocked."""
-    return [a for a in ACTIVITIES if is_activity_unlocked(a["name"])]
+def get_unlocked_activities(timestate=None) -> List[Dict[str, Any]]:
+    """Get all activities that are currently unlocked.
+
+    Args:
+        timestate: Optional TimeState for time-aware unlock checking.
+    """
+    return [a for a in ACTIVITIES if is_activity_unlocked(a["name"], timestate)]
 
 
-def make_activity_task(displayname: str, t: float):
+def make_activity_task(displayname: str, t: float, timestate=None):
     """Create a Task instance for an activity with completion rewards.
 
     Args:
         displayname: The display name of the activity
         t: The time at which to start the task
+        timestate: Optional TimeState for time-aware unlock checking
 
     Returns:
         A Task instance ready to be added to the timeline, or None if not found
@@ -301,8 +314,8 @@ def make_activity_task(displayname: str, t: float):
     if not activity:
         return None
 
-    # Check if activity is unlocked
-    if not is_activity_unlocked(activity["name"]):
+    # Check if activity is unlocked (time-aware if timestate provided)
+    if not is_activity_unlocked(activity["name"], timestate):
         return None
 
     # Create a custom Task class for this activity

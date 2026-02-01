@@ -170,22 +170,30 @@ class UpgradeRegistry:
 
         Args:
             prereq: The prerequisite to check
-            timestate: Optional TimeState for checking variable values
+            timestate: Optional TimeState for time-aware checking.
+                       If provided, checks timestate's purchase/unlock state.
+                       If None, uses global registry (not time-aware).
         """
         if prereq.prereq_type == PrerequisiteType.UPGRADE:
+            if timestate is not None:
+                return timestate.is_upgrade_purchased(prereq.target)
             return self.is_purchased(prereq.target)
 
         elif prereq.prereq_type == PrerequisiteType.RESEARCH:
             # Research is also tracked as purchased upgrades (of type RESEARCH)
+            if timestate is not None:
+                return timestate.is_upgrade_purchased(prereq.target)
             return self.is_purchased(prereq.target)
 
         elif prereq.prereq_type == PrerequisiteType.TASK:
+            # For now, task completion is still global (not time-aware)
+            # TODO: Make task completion time-aware if needed
             return prereq.target in self._completed_tasks
 
         elif prereq.prereq_type == PrerequisiteType.RESOURCE:
-            # Check if resource has ever reached the required value
-            # This would need integration with timeline tracking
-            # For now, check if resource is unlocked
+            # Check if resource has been unlocked
+            if timestate is not None:
+                return timestate.is_resource_unlocked(prereq.target)
             return prereq.target in self._unlocked_resources
 
         elif prereq.prereq_type == PrerequisiteType.VARIABLE:
@@ -232,9 +240,18 @@ class UpgradeRegistry:
         return True
 
     def can_purchase(self, name: str, timestate, t: float) -> bool:
-        """Check if an upgrade can be purchased (prereqs met and costs affordable)."""
+        """Check if an upgrade can be purchased (prereqs met and costs affordable).
+
+        Uses time-aware checking via timestate to determine if already purchased.
+        """
+        # Check if already purchased (time-aware)
+        if timestate is not None:
+            already_purchased = timestate.is_upgrade_purchased(name)
+        else:
+            already_purchased = self.is_purchased(name)
+
         return (
-            not self.is_purchased(name) and
+            not already_purchased and
             self.check_prerequisites(name, timestate) and
             self.check_costs(name, timestate, t)
         )
@@ -245,16 +262,21 @@ class UpgradeRegistry:
         Regular upgrades: visible when prereqs met (even if can't afford)
         Research upgrades: visible when prereqs met (one step out)
         Nexus upgrades: always visible if prereqs met
+
+        Uses time-aware checking if timestate is provided.
         """
         upgrade = self.get(name)
         if not upgrade:
             return False
 
-        # Already purchased = visible
-        if self.is_purchased(name):
+        # Already purchased = visible (time-aware)
+        if timestate is not None:
+            if timestate.is_upgrade_purchased(name):
+                return True
+        elif self.is_purchased(name):
             return True
 
-        # Check prerequisites
+        # Check prerequisites (time-aware if timestate provided)
         return self.check_prerequisites(name, timestate)
 
     def get_visible_upgrades(self, upgrade_type: UpgradeType, timestate=None) -> List[UpgradeDefinition]:
@@ -288,8 +310,11 @@ class UpgradeRegistry:
                 current = var.get(t)
                 var.set(current - cost.amount, t)
 
-        # Mark as purchased
+        # Mark as purchased in global registry (for compatibility)
         self._purchased.add(name)
+
+        # Mark as purchased in timestate (for time-aware queries)
+        timestate.add_purchased_upgrade(name)
 
         # Apply effects
         self._apply_effects(upgrade, timestate, t)
@@ -313,10 +338,18 @@ class UpgradeRegistry:
                 modifier_registry.add_modifier(modifier)
 
             elif effect.effect_type == "unlock_task":
-                self._unlocked_tasks.add(effect.params.get("task_name", ""))
+                task_name = effect.params.get("task_name", "")
+                # Add to global registry (for compatibility)
+                self._unlocked_tasks.add(task_name)
+                # Add to timestate (for time-aware queries)
+                timestate.add_unlocked_task(task_name)
 
             elif effect.effect_type == "unlock_resource":
-                self._unlocked_resources.add(effect.params.get("resource_name", ""))
+                resource_name = effect.params.get("resource_name", "")
+                # Add to global registry (for compatibility)
+                self._unlocked_resources.add(resource_name)
+                # Add to timestate (for time-aware queries)
+                timestate.add_unlocked_resource(resource_name)
 
             elif effect.effect_type == "unlock_upgrade":
                 # This just makes the upgrade visible; it still needs to be purchased

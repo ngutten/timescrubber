@@ -12,21 +12,51 @@ class TimeState():
     registry: Registry = None
     processes: List[Optional["Process"]] = None  # These are things that modify rates while present, so we have to be careful to apply and undo their effects correctly
     time: float = 0.0 # Time of this state
+    purchased_upgrades: set = None  # Upgrades purchased at or before this time
+    unlocked_tasks: set = None  # Tasks unlocked at or before this time
+    unlocked_resources: set = None  # Resources unlocked at or before this time
 
     def __init__(self, t):
         self.time = t
         self.registry = Registry(t)
         self.processes = []
+        self.purchased_upgrades = set()
+        self.unlocked_tasks = set()
+        self.unlocked_resources = set()
 
     def add_variable(self, var):
         self.registry.add_variable(var)
 
     def get_variable(self, name):
         return self.registry.get_variable(name)
-    
-    # Return a hard copy of the timestate, propagated forward to time t (for rehoming linearvariables)    
-    def copy(self, t): 
-        new_state = deepcopy(self)        
+
+    def is_upgrade_purchased(self, name: str) -> bool:
+        """Check if an upgrade has been purchased at or before this timestate."""
+        return name in self.purchased_upgrades
+
+    def is_task_unlocked(self, task_name: str) -> bool:
+        """Check if a task has been unlocked at or before this timestate."""
+        return task_name in self.unlocked_tasks
+
+    def is_resource_unlocked(self, resource_name: str) -> bool:
+        """Check if a resource has been unlocked at or before this timestate."""
+        return resource_name in self.unlocked_resources
+
+    def add_purchased_upgrade(self, name: str):
+        """Record that an upgrade was purchased at this time."""
+        self.purchased_upgrades.add(name)
+
+    def add_unlocked_task(self, task_name: str):
+        """Record that a task was unlocked at this time."""
+        self.unlocked_tasks.add(task_name)
+
+    def add_unlocked_resource(self, resource_name: str):
+        """Record that a resource was unlocked at this time."""
+        self.unlocked_resources.add(resource_name)
+
+    # Return a hard copy of the timestate, propagated forward to time t (for rehoming linearvariables)
+    def copy(self, t):
+        new_state = deepcopy(self)
         new_state.time = t
         new_state.registry.time = t
 
