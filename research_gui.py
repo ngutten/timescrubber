@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from gamestate import GameState
 from gamedefs import RESEARCH_UPGRADES, get_research_tree_data
 from upgrades import (
-    UpgradeDefinition, UpgradeType, get_upgrade_registry
+    UpgradeDefinition, UpgradeType, get_upgrade_registry, create_purchase_event
 )
 from variable import LinearVariable
 
@@ -155,7 +155,7 @@ class ResearchScreen(ttk.Frame):
 
         # Draw prerequisite lines first (so they're behind nodes)
         for upgrade in RESEARCH_UPGRADES:
-            if not registry.is_visible(upgrade.name) and not registry.is_purchased(upgrade.name):
+            if not registry.is_visible(upgrade.name, ts) and not ts.is_upgrade_purchased(upgrade.name):
                 continue
 
             x, y = self._get_node_screen_position(upgrade.render_position)
@@ -166,7 +166,7 @@ class ResearchScreen(ttk.Frame):
                     prereq_center = self.node_positions[prereq.target]
                     # Draw line from prerequisite to this node
                     line_color = "#4a4a4a"
-                    if registry.is_purchased(prereq.target):
+                    if ts.is_upgrade_purchased(prereq.target):
                         line_color = "#4CAF50"  # Green if prereq is purchased
 
                     self.canvas.create_line(
@@ -177,15 +177,15 @@ class ResearchScreen(ttk.Frame):
 
         # Second pass: draw nodes
         for upgrade in RESEARCH_UPGRADES:
-            # Determine visibility
-            is_visible = registry.is_visible(upgrade.name)
-            is_purchased = registry.is_purchased(upgrade.name)
+            # Determine visibility (time-aware)
+            is_visible = registry.is_visible(upgrade.name, ts)
+            is_purchased = ts.is_upgrade_purchased(upgrade.name)
 
             if not is_visible and not is_purchased:
                 # Show as locked placeholder if any prerequisite is visible/purchased
                 any_prereq_visible = False
                 for prereq in upgrade.prerequisites:
-                    if registry.is_visible(prereq.target) or registry.is_purchased(prereq.target):
+                    if registry.is_visible(prereq.target, ts) or ts.is_upgrade_purchased(prereq.target):
                         any_prereq_visible = True
                         break
                 if not any_prereq_visible:
@@ -286,8 +286,8 @@ class ResearchScreen(ttk.Frame):
         # Update header
         self.details_header.configure(text=upgrade.displayname)
 
-        # Update status
-        if registry.is_purchased(upgrade.name):
+        # Update status (time-aware)
+        if ts.is_upgrade_purchased(upgrade.name):
             self.status_label.configure(text="Researched", foreground="green")
         elif registry.can_purchase(upgrade.name, ts, current_time):
             self.status_label.configure(text="Available", foreground="blue")
@@ -352,8 +352,8 @@ class ResearchScreen(ttk.Frame):
         else:
             self.effects_label.configure(text="Unlocks further research")
 
-        # Update button state
-        if registry.is_purchased(upgrade.name):
+        # Update button state (time-aware)
+        if ts.is_upgrade_purchased(upgrade.name):
             self.research_btn.configure(state="disabled", text="Researched")
         elif registry.can_purchase(upgrade.name, ts, current_time):
             self.research_btn.configure(state="normal", text="Research")
@@ -370,13 +370,16 @@ class ResearchScreen(ttk.Frame):
         ts = self.gamestate.timeline.state_at(current_time)
 
         if registry.can_purchase(self.selected_research.name, ts, current_time):
-            success = registry.purchase(self.selected_research.name, ts, current_time)
-            if success:
+            # Create a purchase event and add it to the timeline
+            # This ensures the research shows up on the timeline and persists correctly
+            purchase_event = create_purchase_event(self.selected_research.name, current_time)
+            if purchase_event:
+                self.gamestate.timeline.add_event(purchase_event)
                 print(f"Researched: {self.selected_research.displayname}")
                 self._draw_tree()
                 self._update_details()
             else:
-                print(f"Failed to research: {self.selected_research.displayname}")
+                print(f"Failed to create research event: {self.selected_research.displayname}")
         else:
             print(f"Cannot research: {self.selected_research.displayname}")
 
